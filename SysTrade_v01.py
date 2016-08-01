@@ -5,6 +5,12 @@ import datetime
 import quandl
 
 
+def get_futures_info():
+    df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_FuturesContracts.csv')
+
+    return df
+
+
 def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
     """Constructs a list of futures contract codes for a
     particular symbol and time frame."""
@@ -50,6 +56,7 @@ def get_active_contracts(symbol, start_year=2006, end_year=2016):
     # create data frame with unique dates as index
     df = pd.DataFrame({'Date': unique_dates})
     df = df.set_index(['Date'])
+    df.insert(0, 'Symbol', symbol)
     # find active contract for each date in dataframe
     for dt in df.index:
         # check that there are at least two contracts available on a given date
@@ -136,6 +143,18 @@ def ewmac(forecast_inputs, fast_days, slow_days):
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
     df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
-
     return df
 
+
+def carry(forecast_inputs):
+    df = forecast_inputs
+    df['PrevLessActive'] = df['PrevSettleRaw'] - df['SettleRaw']
+    df['PrevLessActiveAnn'] = df['PrevLessActive']
+    df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
+    df['ScalarUnpooled'] = 10 / np.median(np.abs(df['VolAdjCarry']))
+    df['ScalarPooled'] = df['ScalarUnpooled']  # placeholder until replaced by function
+    df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
+    df['ForecastCapped'] = df['Forecast']
+    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    return df
