@@ -7,7 +7,6 @@ import quandl
 
 def get_futures_info():
     df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_FuturesContracts.csv')
-
     return df
 
 
