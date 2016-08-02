@@ -8,6 +8,7 @@ import quandl
 # set display width
 pd.set_option('display.width', 240)
 
+
 def get_futures_info():
     """Retrieves futures contract data from GitHub."""
     df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_FuturesContracts.csv')
@@ -52,7 +53,7 @@ def download_historical_prices(symbol):
     prices = quandl.get(full_name, authtoken=auth_token)
     prices = prices['Settle']
     # add contract_sort in order to sort by year then by month using contract name
-    prices = pd.DataFrame({'Settle': pd.Series(prices), 'Contract': symbol, 'Contract_Sort': symbol[-4:]+symbol[:3] })
+    prices = pd.DataFrame({'Settle': pd.Series(prices), 'Contract': symbol, 'Contract_Sort': symbol[-4:]+symbol[:3]})
     return prices
 
 
@@ -78,12 +79,12 @@ def get_active_contracts(symbol, start_year=2006, end_year=2016):
     df = df.set_index(['Date'])
     df.insert(0, 'Symbol', symbol)
     # find active contract for each date in dataframe
-    for dt in df.index:
+    for d in df.index:
         # check that there are at least two contracts available on a given date
         # sort by contract_sort but use contract name
-        if len(full_prices.sort_index()[dt:dt].sort_values('Contract_Sort')['Contract'].index) >= 2:
-            active_contract = full_prices.sort_index()[dt:dt].sort_values('Contract_Sort')['Contract'][1]
-            df.loc[dt, 'Contract'] = active_contract
+        if len(full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'].index) >= 2:
+            active_contract = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][1]
+            df.loc[d, 'Contract'] = active_contract
     # delete empty rows
     df = df[df['Contract'] == df['Contract']]
     return df
@@ -102,7 +103,9 @@ def get_active_prices(symbol, start_year=2006, end_year=2016):
     # stitch settle prices to remainder of contracts
     for contract in df['Contract'].unique()[::-1][1:]:
         prices = full_prices[full_prices['Contract'] == contract]
-        end_date = df[df['Settle'] == df['Settle']].sort_index()[:1].index.to_pydatetime()[0]
+        df_prices = df[df['Settle'] == df['Settle']]  # exclude rows with missing prices
+        df_prices = df_prices.loc[df_prices.index.isin(prices.index)]  # include only dates in both df and prices
+        end_date = df_prices.index.min().to_pydatetime()  # identify earliest date
         adjustment = df['Settle'][end_date] - prices['Settle'][end_date]
         df.loc[df['Contract'] == contract, 'SettleRaw'] = prices['Settle']
         df.loc[df['Contract'] == contract, 'Settle'] = prices['Settle'] + adjustment
@@ -143,7 +146,7 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     for i in list(range(1, df.shape[0])):
         df['Variance'].iloc[i] = df['Variance'].iloc[i - 1] * (1 - lambda_36) + df['ReturnDaySq'].iloc[i] * lambda_36
     df['PriceVolatility'] = df['Variance'] ** 0.5
-    df['PriceVolatilityPerc'] = df['PriceVolatility'] / df['SettleRaw']
+    df['PriceVolatilityPct'] = df['PriceVolatility'] / df['SettleRaw']
 
     # df.sort_index(ascending=False, inplace=True)
     return df
@@ -212,8 +215,8 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
     # calculate instrument value vol
     futures_info = get_futures_info()
     block_size = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize']
-    df['BlockValue'] = df['SettleRaw'] * block_size * 0.01
-    df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPerc'] * 100
+    df['BlockValue'] = df['SettleRaw'] * block_size[0] * 0.01
+    df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPct'] * 100
 
     # --------------------------------------------------------------------------
     # need to add functionality to handle historical exchange rates
@@ -222,20 +225,19 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
     df['InstrumentValueVol'] = df['InstrumentCurVol']
     # --------------------------------------------------------------------------
 
-    return df[['Symbol', 'Contract', 'SettleRaw', 'PriceVolatility', 'PriceVolatilityPerc', 'InstrumentForecast',
+    return df[['Symbol', 'Contract', 'SettleRaw', 'PriceVolatility', 'PriceVolatilityPct', 'InstrumentForecast',
                'BlockValue', 'InstrumentValueVol']]
 
 
-def calc_instrument_position():
-    """Constructs data frame comprised of instrument positions."""
-
-
-def calc_backtest(symbols_list = ['ES', 'TY', 'ED', 'MP', 'C', 'FESX', 'NG', 'PL'],
-                  start_date = dt.date(2015, 1, 1), starting_capital = 100000, volatility_target = 0.25):
+def run_backtest(symbols_list=['ES', 'TY'],
+                  start_date=dt.date(2015, 1, 1), starting_capital = 100000, volatility_target = 0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
-    start_year = start_date.year - 1
+    start_year = start_date.year
     end_year = dt.date.today().year
-    df = calc_instrument_forecasts(symbol, start_year, end_year)
+    all_data = []  # list of forecast data frames for each symbol
+    for symbol in symbols_list:
+        df = calc_instrument_forecasts(symbol, start_year, end_year)
+        all_data.append(df)
 
-    return df
+    return all_data
