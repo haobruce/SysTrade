@@ -1,12 +1,28 @@
 import pandas as pd
 import numpy as np
+import datetime as dt
 # import urllib2
-import datetime
 import quandl
 
 
+# set display width
+pd.set_option('display.width', 240)
+
 def get_futures_info():
+    """Retrieves futures contract data from GitHub."""
     df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_FuturesContracts.csv')
+    return df
+
+
+def get_strategy_weights():
+    """Constructs data frame containing strategy weights."""
+    df = pd.DataFrame({'Rule': ['EWMAC', 'EWMAC', 'EWMAC', 'CARRY'],
+                       'Variation': ['16,64', '32,128', '64,256', ''],
+                       'UnadjustedWeight': [0.21, 0.08, 0.21, 0.5],
+                       'CostAdjustment': [1, 1, 1, 1]
+                       })
+    df['AdjWeight'] = df['UnadjustedWeight'] * df['CostAdjustment']
+    df = df[['Rule', 'Variation', 'UnadjustedWeight', 'CostAdjustment', 'AdjWeight']]
     return df
 
 
@@ -30,6 +46,7 @@ def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
 
 
 def download_historical_prices(symbol):
+    """Downloads futures pricing data from Quandl for a specific contract."""
     auth_token = 'g1CWzGxxg2WxNVbV5n9y'
     full_name = 'CME/' + symbol
     prices = quandl.get(full_name, authtoken=auth_token)
@@ -40,6 +57,8 @@ def download_historical_prices(symbol):
 
 
 def compile_historical_prices(symbol, start_year=2006, end_year=2016):
+    """Combines futures pricing data for contracts within specified date range
+    for a specific symbol."""
     symbol_list = construct_futures_symbols(symbol, start_year, end_year)
     prices = download_historical_prices(symbol_list[0])
     for sym in symbol_list[1:]:
@@ -49,6 +68,8 @@ def compile_historical_prices(symbol, start_year=2006, end_year=2016):
 
 
 def get_active_contracts(symbol, start_year=2006, end_year=2016):
+    """Constructs a data frame of active contracts, i.e. next-nearest contract, by date
+    within specified date range."""
     full_prices = compile_historical_prices(symbol, start_year, end_year)
     # find unique dates since fullPrices repeats date index as contracts overlap
     unique_dates = full_prices.sort_index().index.unique()
@@ -69,6 +90,7 @@ def get_active_contracts(symbol, start_year=2006, end_year=2016):
 
 
 def get_active_prices(symbol, start_year=2006, end_year=2016):
+    """Stitches together futures prices based on Panama Method."""
     full_prices = compile_historical_prices(symbol, start_year, end_year)
     df = get_active_contracts(symbol, start_year, end_year)
     # add settle prices to most recent contract
@@ -88,6 +110,8 @@ def get_active_prices(symbol, start_year=2006, end_year=2016):
 
 
 def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
+    """Constructs data frame with necessary data for all strategy forecast
+     calculations, e.g. EWMAC, carry, etc."""
     full_prices = compile_historical_prices(symbol, start_year, end_year)
     # get data for active contract
     df = get_active_prices(symbol, start_year, end_year)
@@ -125,8 +149,10 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     return df
 
 
-def ewmac(forecast_inputs, fast_days, slow_days):
-    df = forecast_inputs
+def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
+    """Constructs data frame comprised of forecasts for a specified
+    forecasts_input data frame and speed parameters for the EWMAC strategies."""
+    df = forecast_inputs.copy()
     lambda_fast = 2 / (fast_days + 1)
     lambda_slow = 2 / (slow_days + 1)
     df['Fast'] = df['Settle']
@@ -145,8 +171,10 @@ def ewmac(forecast_inputs, fast_days, slow_days):
     return df
 
 
-def carry(forecast_inputs):
-    df = forecast_inputs
+def calc_carry_forecasts(forecast_inputs):
+    """Constructs data frame comprised of forecasts for a specified
+    forecasts_input data for the carry strategy."""
+    df = forecast_inputs.copy()
     df['PrevLessActive'] = df['PrevSettleRaw'] - df['SettleRaw']
     df['PrevLessActiveAnn'] = df['PrevLessActive']
     df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
@@ -156,4 +184,58 @@ def carry(forecast_inputs):
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
     df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    return df
+
+
+def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
+    """Constructs data frame comprised of instrument forecasts based on available
+    strategies and weights."""
+    forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
+    df = forecast_inputs.copy()
+    # loop through strategies and add strategy forecasts as separate columns
+    strategies = get_strategy_weights()
+    for i in list(range(0, len(strategies))):
+        if strategies.loc[i, 'Rule'] == 'EWMAC':
+            fast = int(strategies.loc[i, 'Variation'].split(',')[0])
+            slow = int(strategies.loc[i, 'Variation'].split(',')[1])
+            strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
+            df[strategy_name] = calc_ewmac_forecasts(forecast_inputs, fast, slow)['ForecastCapped']
+        elif strategies.loc[i, 'Rule'] == 'CARRY':
+            strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
+            df[strategy_name] = calc_carry_forecasts(forecast_inputs)['ForecastCapped']
+
+    # calculate instrument forecast as weighted average of strategy forecasts
+    forecasts = df[['EWMAC16,64', 'EWMAC32,128', 'EWMAC64,256', 'CARRY']]
+    weights = strategies['AdjWeight']
+    df['InstrumentForecast'] = np.dot(forecasts, weights)
+
+    # calculate instrument value vol
+    futures_info = get_futures_info()
+    block_size = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize']
+    df['BlockValue'] = df['SettleRaw'] * block_size * 0.01
+    df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPerc'] * 100
+
+    # --------------------------------------------------------------------------
+    # need to add functionality to handle historical exchange rates
+    # update instrument value volatility once exchange rates are available
+    exchange_rate = futures_info.loc[futures_info['Symbol'] == symbol, 'FX']
+    df['InstrumentValueVol'] = df['InstrumentCurVol']
+    # --------------------------------------------------------------------------
+
+    return df[['Symbol', 'Contract', 'SettleRaw', 'PriceVolatility', 'PriceVolatilityPerc', 'InstrumentForecast',
+               'BlockValue', 'InstrumentValueVol']]
+
+
+def calc_instrument_position():
+    """Constructs data frame comprised of instrument positions."""
+
+
+def calc_backtest(symbols_list = ['ES', 'TY', 'ED', 'MP', 'C', 'FESX', 'NG', 'PL'],
+                  start_date = dt.date(2015, 1, 1), starting_capital = 100000, volatility_target = 0.25):
+    """Conducts backtest of available strategies on specified futures contracts over
+    specified period of time."""
+    start_year = start_date.year - 1
+    end_year = dt.date.today().year
+    df = calc_instrument_forecasts(symbol, start_year, end_year)
+
     return df
