@@ -6,7 +6,7 @@ import quandl
 
 
 # set display width
-pd.set_option('display.width', 240)
+pd.set_option('display.width', 100)
 
 
 def get_futures_info():
@@ -142,7 +142,7 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     df['ReturnDaySq'] = df['ReturnDay'] ** 2
     df['Variance'] = df['ReturnDaySq']
     # skip first row for volatility calculation
-    lambda_36 = 2 / (36 + 1) # for 36 day look back
+    lambda_36 = 2 / (36 + 1)  # for 36 day look back
     for i in list(range(1, df.shape[0])):
         df['Variance'].iloc[i] = df['Variance'].iloc[i - 1] * (1 - lambda_36) + df['ReturnDaySq'].iloc[i] * lambda_36
     df['PriceVolatility'] = df['Variance'] ** 0.5
@@ -214,30 +214,86 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
 
     # calculate instrument value vol
     futures_info = get_futures_info()
-    block_size = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize']
-    df['BlockValue'] = df['SettleRaw'] * block_size[0] * 0.01
+    block_size = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize'].values[0]
+    df['BlockValue'] = df['SettleRaw'] * block_size * 0.01
     df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPct'] * 100
 
-    # --------------------------------------------------------------------------
+    # *************************************************************************
     # need to add functionality to handle historical exchange rates
     # update instrument value volatility once exchange rates are available
     exchange_rate = futures_info.loc[futures_info['Symbol'] == symbol, 'FX']
     df['InstrumentValueVol'] = df['InstrumentCurVol']
-    # --------------------------------------------------------------------------
+    # *************************************************************************
 
     return df[['Symbol', 'Contract', 'SettleRaw', 'PriceVolatility', 'PriceVolatilityPct', 'InstrumentForecast',
-               'BlockValue', 'InstrumentValueVol']]
+               'BlockSize', 'BlockValue', 'InstrumentValueVol']]
 
 
-def run_backtest(symbols_list=['ES', 'TY'],
-                  start_date=dt.date(2015, 1, 1), starting_capital = 100000, volatility_target = 0.25):
+def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), starting_capital = 100000,
+                 volatility_target = 0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
+    # set scalar variables
     start_year = start_date.year
     end_year = dt.date.today().year
-    all_data = []  # list of forecast data frames for each symbol
+    min_date = pd.Timestamp(dt.date(1900, 1, 1))
+    max_date = pd.Timestamp(dt.date.today())
+    instrument_weight = 1 / len(symbols_list)
+    # *************************************************************************
+    # change the multiplier to be dynamic based on number of instruments
+    instrument_diversifier_multiplier = 1.41
+    # *************************************************************************
+    position_inertia = 0.1
+
+    # construct dictionary to combine forecast with position and gain loss
+    data_dict = {}
     for symbol in symbols_list:
         df = calc_instrument_forecasts(symbol, start_year, end_year)
-        all_data.append(df)
+        # placeholders below
+        df['VolatilityScalar'] = 0.0
+        df['SubsystemPosition'] = 0.0
+        df['SystemPosition'] = 0.0
+        df['StartingPosition'] = 0.0
+        df['EndingPosition'] = 0.0
+        df['PositionChange'] = 0.0
+        df['PositionCost'] = 0.0
+        df['PositionValue'] = 0.0
+        df['GainLossCum'] = 0.0
+        data_dict[symbol] = df
+        if df.index.min() > min_date: min_date = df.index.min()
+        if df.index.max() < max_date: max_date = df.index.max()
 
-    return all_data
+    # construct data frame from min and max dates
+    min_date += pd.Timedelta(days=90)  # start back test 90 days after min date to ensure ample data for forecasts
+    backtest_df = pd.DataFrame({'Date': pd.bdate_range(min_date, max_date)})
+    backtest_df = backtest_df.set_index(['Date'])
+    backtest_df['PortfolioValue'] = starting_capital
+    backtest_df['DailyCashTargetVol'] = starting_capital * volatility_target / (256 ** 0.5)
+    # iterate through each date in df to retrieve ForecastCapped and InstrumentValueVol
+    for i in list(range(0, len(backtest_df))):
+        for key in data_dict.keys():
+            # check if date in df exists in data_dict
+            if backtest_df.index[i] in data_dict[key].index:
+                active_date = backtest_df.index[i]
+                data_dict[key]['VolatilityScalar'][active_date] = backtest_df['DailyCashTargetVol'][active_date] / \
+                                                                  data_dict[key]['InstrumentValueVol'][active_date]
+                data_dict[key]['SubsystemPosition'][active_date] = data_dict[key]['InstrumentForecast'][active_date] / \
+                                                                   10.0 * data_dict[key]['VolatilityScalar'][active_date]
+                data_dict[key]['SystemPosition'][active_date] = data_dict[key]['SubsystemPosition'][active_date] * \
+                                                                instrument_weight * instrument_diversifier_multiplier
+                if i != 0:  # skip first row
+                    data_dict[key]['StartingPosition'][active_date] = data_dict[key]['EndingPosition'].iloc[i-1]
+                # determine trade based on starting_position, ending_position and system_position
+                starting_position = data_dict[key]['StartingPosition'][active_date]
+                ending_position = starting_position
+                system_position = data_dict[key]['SystemPosition'][active_date]
+                if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) > position_inertia):
+                    ending_position = np.round(system_position, 0)
+                data_dict[key]['EndingPosition'][active_date] = ending_position
+                data_dict[key]['PositionChange'][active_date] = ending_position - starting_position
+                data_dict[key]['PositionCost'][active_date]
+
+
+    # below is how to merge two data frames while preserving the index
+    # df3 = pd.merge(df1, df2, on=['Date'], how='outer')
+    return data_dict
