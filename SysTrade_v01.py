@@ -34,11 +34,17 @@ def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
 
     # append expiration month code to symbol name
     if symbol == 'C':
-        months = 'HMNUZ'  # corn futures can expire in an additional month N
+        months = 'HKNUZ'  # corn futures can expire in an additional month N
     elif symbol == 'NG':
         months = 'FGHJKMNQUVXZ'  # natural gas futures can expire in any month
     else:
         months = 'HMUZ'  # March, June, September and December delivery codes
+
+    # add exchange prefix to symbol name
+    if symbol == 'FESX':
+        symbol = 'EUREX/' + symbol  # exception for 
+    else:
+        symbol = 'CME/' + symbol
 
     for y in range(start_year, end_year + 1):
         for m in months:
@@ -214,8 +220,8 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
 
     # calculate instrument value vol
     futures_info = get_futures_info()
-    block_size = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize'].values[0]
-    df['BlockValue'] = df['SettleRaw'] * block_size * 0.01
+    df['BlockSize'] = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize'].values[0]
+    df['BlockValue'] = df['SettleRaw'] * df['BlockSize'] * 0.01
     df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPct'] * 100
 
     # *************************************************************************
@@ -269,31 +275,58 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
     backtest_df = backtest_df.set_index(['Date'])
     backtest_df['PortfolioValue'] = starting_capital
     backtest_df['DailyCashTargetVol'] = starting_capital * volatility_target / (256 ** 0.5)
+    backtest_df['TotalPositionCost'] = 0.0
+    backtest_df['TotalPositionValue'] = 0.0
+    backtest_df['TotalGainLoss'] = 0.0
+
     # iterate through each date in df to retrieve ForecastCapped and InstrumentValueVol
-    for i in list(range(0, len(backtest_df))):
-        for key in data_dict.keys():
+    for key in data_dict.keys():
+        for i in list(range(0, len(backtest_df))):
             # check if date in df exists in data_dict
             if backtest_df.index[i] in data_dict[key].index:
                 active_date = backtest_df.index[i]
+
+                # update capital balance and volatility targets based on gain loss in backtest_df
+                if i != 0:  # skip first day
+                    backtest_df['TotalPositionCost'][active_date] += data_dict[key]['PositionCost'][prev_date]
+                    backtest_df['TotalPositionValue'][active_date] += data_dict[key]['PositionValue'][prev_date]
+                    backtest_df['TotalGainLoss'][active_date] += data_dict[key]['GainLossCum'][prev_date]
+                    backtest_df['PortfolioValue'][active_date] = starting_capital + backtest_df['TotalGainLoss'][active_date]
+                    backtest_df['DailyCashTargetVol'][active_date] = backtest_df['PortfolioValue'][active_date] * \
+                                                                     volatility_target / (256 ** 0.5)
+
                 data_dict[key]['VolatilityScalar'][active_date] = backtest_df['DailyCashTargetVol'][active_date] / \
                                                                   data_dict[key]['InstrumentValueVol'][active_date]
                 data_dict[key]['SubsystemPosition'][active_date] = data_dict[key]['InstrumentForecast'][active_date] / \
                                                                    10.0 * data_dict[key]['VolatilityScalar'][active_date]
                 data_dict[key]['SystemPosition'][active_date] = data_dict[key]['SubsystemPosition'][active_date] * \
                                                                 instrument_weight * instrument_diversifier_multiplier
-                if i != 0:  # skip first row
-                    data_dict[key]['StartingPosition'][active_date] = data_dict[key]['EndingPosition'].iloc[i-1]
+                if i != 0:  # skip first day
+                    data_dict[key]['StartingPosition'][active_date] = data_dict[key]['EndingPosition'].loc[prev_date]
+
                 # determine trade based on starting_position, ending_position and system_position
+                # define varialble to minimize space
                 starting_position = data_dict[key]['StartingPosition'][active_date]
                 ending_position = starting_position
                 system_position = data_dict[key]['SystemPosition'][active_date]
+                block_size = data_dict[key]['BlockSize'][active_date]
+                block_price = data_dict[key]['SettleRaw'][active_date]
+
                 if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) > position_inertia):
                     ending_position = np.round(system_position, 0)
                 data_dict[key]['EndingPosition'][active_date] = ending_position
                 data_dict[key]['PositionChange'][active_date] = ending_position - starting_position
-                data_dict[key]['PositionCost'][active_date]
+                if i != 0:  # skip first day; else set PositionCost equal to previous value
+                    data_dict[key]['PositionCost'][active_date] = data_dict[key]['PositionCost'].loc[prev_date]
+                data_dict[key]['PositionCost'][active_date] += (ending_position - starting_position) * \
+                                                               block_size * block_price
+                data_dict[key]['PositionValue'][active_date] = ending_position * block_size * block_price
+                data_dict[key]['GainLossCum'][active_date] = data_dict[key]['PositionValue'][active_date] - \
+                                                             data_dict[key]['PositionCost'][active_date]
 
+                prev_date = active_date
 
-    # below is how to merge two data frames while preserving the index
-    # df3 = pd.merge(df1, df2, on=['Date'], how='outer')
-    return data_dict
+    return backtest_df, data_dict
+
+# below is how to merge two data frames while preserving the index
+# df3 = pd.merge(df1, df2, on=['Date'], how='outer')
