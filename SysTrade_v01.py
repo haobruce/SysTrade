@@ -33,18 +33,8 @@ def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
     futures = []
 
     # append expiration month code to symbol name
-    if symbol == 'C':
-        months = 'HKNUZ'  # corn futures can expire in an additional month N
-    elif symbol == 'NG':
-        months = 'FGHJKMNQUVXZ'  # natural gas futures can expire in any month
-    else:
-        months = 'HMUZ'  # March, June, September and December delivery codes
-
-    # add exchange prefix to symbol name
-    if symbol == 'FESX':
-        symbol = 'EUREX/' + symbol  # exception for 
-    else:
-        symbol = 'CME/' + symbol
+    futures_info = get_futures_info()
+    months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
 
     for y in range(start_year, end_year + 1):
         for m in months:
@@ -55,7 +45,13 @@ def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
 def download_historical_prices(symbol):
     """Downloads futures pricing data from Quandl for a specific contract."""
     auth_token = 'g1CWzGxxg2WxNVbV5n9y'
-    full_name = 'CME/' + symbol
+
+    # add exchange prefix to symbol name
+    futures_info = get_futures_info()
+    prefix = futures_info['Exchange'].loc[futures_info['Symbol'] == symbol[:-5]].values[0]  # strip off month and year
+    full_name = prefix + '/' + symbol
+
+    # download prices from quandl using full_name
     prices = quandl.get(full_name, authtoken=auth_token)
     prices = prices['Settle']
     # add contract_sort in order to sort by year then by month using contract name
@@ -74,17 +70,16 @@ def compile_historical_prices(symbol, start_year=2006, end_year=2016):
     return prices
 
 
-def get_active_contracts(symbol, start_year=2006, end_year=2016):
+def get_active_contracts(symbol, full_prices):
     """Constructs a data frame of active contracts, i.e. next-nearest contract, by date
     within specified date range."""
-    full_prices = compile_historical_prices(symbol, start_year, end_year)
     # find unique dates since fullPrices repeats date index as contracts overlap
     unique_dates = full_prices.sort_index().index.unique()
     # create data frame with unique dates as index
     df = pd.DataFrame({'Date': unique_dates})
     df = df.set_index(['Date'])
     df.insert(0, 'Symbol', symbol)
-    # find active contract for each date in dataframe
+    # find active contract for each date in data frame
     for d in df.index:
         # check that there are at least two contracts available on a given date
         # sort by contract_sort but use contract name
@@ -96,18 +91,17 @@ def get_active_contracts(symbol, start_year=2006, end_year=2016):
     return df
 
 
-def get_active_prices(symbol, start_year=2006, end_year=2016):
+def get_active_prices(symbol, full_prices, start_year=2006, end_year=2016):
     """Stitches together futures prices based on Panama Method."""
-    full_prices = compile_historical_prices(symbol, start_year, end_year)
-    df = get_active_contracts(symbol, start_year, end_year)
+    df = get_active_contracts(symbol, full_prices)
     # add settle prices to most recent contract
-    contract = df['Contract'].unique()[::-1][0]
+    contract = df['Contract'].sort_values(ascending=False).unique()[0]
     prices = full_prices[full_prices['Contract'] == contract]
     # add column for unadjusted settle prices for easier checking
     df.loc[df['Contract'] == contract, 'SettleRaw'] = prices['Settle']
     df.loc[df['Contract'] == contract, 'Settle'] = prices['Settle']
     # stitch settle prices to remainder of contracts
-    for contract in df['Contract'].unique()[::-1][1:]:
+    for contract in df['Contract'].sort_values(ascending=False).unique()[1:]:
         prices = full_prices[full_prices['Contract'] == contract]
         df_prices = df[df['Settle'] == df['Settle']]  # exclude rows with missing prices
         df_prices = df_prices.loc[df_prices.index.isin(prices.index)]  # include only dates in both df and prices
@@ -123,24 +117,29 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
      calculations, e.g. EWMAC, carry, etc."""
     full_prices = compile_historical_prices(symbol, start_year, end_year)
     # get data for active contract
-    df = get_active_prices(symbol, start_year, end_year)
+    df = get_active_prices(symbol, full_prices, start_year, end_year)
     # add month and year to data frame
-    df['Month'] = df['Contract'].str[2]
+    df['Month'] = df['Contract'].str[-5]
     df['Year'] = pd.to_numeric(df['Contract'].str[-4:])
+
     # add previous month
-    df.loc[df['Month'].str[0] == 'H', 'PrevMonth'] = 'Z'
-    df.loc[df['Month'].str[0] == 'M', 'PrevMonth'] = 'H'
-    df.loc[df['Month'].str[0] == 'U', 'PrevMonth'] = 'M'
-    df.loc[df['Month'].str[0] == 'Z', 'PrevMonth'] = 'U'
-    # for March decrease year by one to previous year
-    df.loc[df['Month'].str[0] == 'H', 'Year'] = df['Year']-1
+    futures_info = get_futures_info()
+    months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
+    for i, month in enumerate(months):
+        if i == 0:  # first month
+            df.loc[df['Month'] == month, 'PrevMonth'] = months[-1]
+            df.loc[df['Month'] == month, 'Year'] = df['Year']-1
+        else:
+            df.loc[df['Month'] == month, 'PrevMonth'] = months[i-1]
 
     # add data for prev contract
-    df['PrevContract'] = df['Contract'].str[0:2] + df['PrevMonth'] + df['Year'].astype(str)
+    df['PrevContract'] = df['Symbol'] + df['PrevMonth'] + df['Year'].astype(str)
     # add raw settle prices for prev contract
     for contract in df['PrevContract'].unique()[::-1]:
         prices = full_prices[full_prices['Contract'] == contract]
         df.loc[df['PrevContract'] == contract, 'PrevSettleRaw'] = prices['Settle']
+    # remove NaN rows as some contracts have longer histories than others
+    df = df[pd.notnull(df['PrevSettleRaw'])]
 
     # add data for return volatility based on raw price data
     df['ReturnDay'] = df['SettleRaw'] - df['SettleRaw'].shift(1)
@@ -153,8 +152,6 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
         df['Variance'].iloc[i] = df['Variance'].iloc[i - 1] * (1 - lambda_36) + df['ReturnDaySq'].iloc[i] * lambda_36
     df['PriceVolatility'] = df['Variance'] ** 0.5
     df['PriceVolatilityPct'] = df['PriceVolatility'] / df['SettleRaw']
-
-    # df.sort_index(ascending=False, inplace=True)
     return df
 
 
@@ -171,7 +168,7 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
         df['Slow'].iloc[i] = df['Slow'].iloc[i - 1] * (1 - lambda_slow) + df['Settle'].iloc[i] * lambda_slow
     df['RawCrossover'] = df['Fast'] - df['Slow']
     df['VolAdjCrossover'] = df['RawCrossover'] / df['PriceVolatility']
-    df['ScalarUnpooled'] = 10 / np.median(np.abs(df['VolAdjCrossover']))
+    df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCrossover']))
     df['ScalarPooled'] = df['ScalarUnpooled']  # placeholder until replaced by function
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
@@ -187,7 +184,7 @@ def calc_carry_forecasts(forecast_inputs):
     df['PrevLessActive'] = df['PrevSettleRaw'] - df['SettleRaw']
     df['PrevLessActiveAnn'] = df['PrevLessActive']
     df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
-    df['ScalarUnpooled'] = 10 / np.median(np.abs(df['VolAdjCarry']))
+    df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCarry']))
     df['ScalarPooled'] = df['ScalarUnpooled']  # placeholder until replaced by function
     df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
@@ -235,6 +232,9 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
                'BlockSize', 'BlockValue', 'InstrumentValueVol']]
 
 
+# *************************************************************************
+# set end_year = current year; start_date = beginning of previous year
+# *************************************************************************
 def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), starting_capital = 100000,
                  volatility_target = 0.25):
     """Conducts backtest of available strategies on specified futures contracts over
@@ -305,14 +305,15 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
                     data_dict[key]['StartingPosition'][active_date] = data_dict[key]['EndingPosition'].loc[prev_date]
 
                 # determine trade based on starting_position, ending_position and system_position
-                # define varialble to minimize space
+                # define variable to minimize space
                 starting_position = data_dict[key]['StartingPosition'][active_date]
                 ending_position = starting_position
                 system_position = data_dict[key]['SystemPosition'][active_date]
                 block_size = data_dict[key]['BlockSize'][active_date]
                 block_price = data_dict[key]['SettleRaw'][active_date]
 
-                if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) > position_inertia):
+                if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) >
+                                                  position_inertia):
                     ending_position = np.round(system_position, 0)
                 data_dict[key]['EndingPosition'][active_date] = ending_position
                 data_dict[key]['PositionChange'][active_date] = ending_position - starting_position
@@ -327,6 +328,3 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
                 prev_date = active_date
 
     return backtest_df, data_dict
-
-# below is how to merge two data frames while preserving the index
-# df3 = pd.merge(df1, df2, on=['Date'], how='outer')
