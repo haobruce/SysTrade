@@ -84,14 +84,14 @@ def get_active_contracts(symbol, full_prices):
         # check that there are at least two contracts available on a given date
         # sort by contract_sort but use contract name
         if len(full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'].index) >= 2:
-            active_contract = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][1]
-            df.loc[d, 'Contract'] = active_contract
+            df.loc[d, 'Contract'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][1]
+            df.loc[d, 'Contract_Sort'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract_Sort'][1]
     # delete empty rows
     df = df[df['Contract'] == df['Contract']]
     return df
 
 
-def get_active_prices(symbol, full_prices, start_year=2006, end_year=2016):
+def get_active_prices(symbol, full_prices):
     """Stitches together futures prices based on Panama Method."""
     df = get_active_contracts(symbol, full_prices)
     # add settle prices to most recent contract
@@ -101,7 +101,7 @@ def get_active_prices(symbol, full_prices, start_year=2006, end_year=2016):
     df.loc[df['Contract'] == contract, 'SettleRaw'] = prices['Settle']
     df.loc[df['Contract'] == contract, 'Settle'] = prices['Settle']
     # stitch settle prices to remainder of contracts
-    for contract in df['Contract'].sort_values(ascending=False).unique()[1:]:
+    for contract in df.sort_values('Contract_Sort', ascending=False)['Contract'].unique()[1:]:
         prices = full_prices[full_prices['Contract'] == contract]
         df_prices = df[df['Settle'] == df['Settle']]  # exclude rows with missing prices
         df_prices = df_prices.loc[df_prices.index.isin(prices.index)]  # include only dates in both df and prices
@@ -117,7 +117,7 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
      calculations, e.g. EWMAC, carry, etc."""
     full_prices = compile_historical_prices(symbol, start_year, end_year)
     # get data for active contract
-    df = get_active_prices(symbol, full_prices, start_year, end_year)
+    df = get_active_prices(symbol, full_prices)
     # add month and year to data frame
     df['Month'] = df['Contract'].str[-5]
     df['Year'] = pd.to_numeric(df['Contract'].str[-4:])
@@ -169,7 +169,10 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     df['RawCrossover'] = df['Fast'] - df['Slow']
     df['VolAdjCrossover'] = df['RawCrossover'] / df['PriceVolatility']
     df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCrossover']))
-    df['ScalarPooled'] = df['ScalarUnpooled']  # placeholder until replaced by function
+    # *************************************************************************
+    # placeholder until replaced by function
+    df['ScalarPooled'] = df['ScalarUnpooled']
+    # *************************************************************************
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
@@ -185,12 +188,25 @@ def calc_carry_forecasts(forecast_inputs):
     df['PrevLessActiveAnn'] = df['PrevLessActive']
     df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
     df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCarry']))
-    df['ScalarPooled'] = df['ScalarUnpooled']  # placeholder until replaced by function
+    # *************************************************************************
+    # placeholder until replaced by function
+    df['ScalarPooled'] = df['ScalarUnpooled']
+    # *************************************************************************
     df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
     df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
+
+
+# calculate ScalarPooled
+scalar_list = []
+symbols_list = get_futures_info()['Symbol'].tolist()
+for symbol in symbols_list:
+    forecast_inputs = get_forecast_inputs(symbol)
+    ewmac_forecasts = calc_ewmac_forecasts(forecast_inputs, 16, 64)
+    scalar_list.append(ewmac_forecasts['ScalarUnpooled'][0])
+np.median(scalar_list)
 
 
 def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
