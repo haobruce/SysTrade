@@ -172,7 +172,7 @@ def calc_ewmac_scalars(fast_days, slow_days):
     return np.median(scalar_list)
 
 
-def calc_ewma_forecasts(forecast_inputs, fast_days, slow_days):
+def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the EWMAC strategies."""
     df = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
