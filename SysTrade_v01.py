@@ -10,20 +10,16 @@ pd.set_option('display.width', 100)
 
 
 def get_futures_info():
-    """Retrieves futures contract data from GitHub."""
+    """Retrieves futures contract data from Github."""
     df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_FuturesContracts.csv')
     return df
 
 
-def get_strategy_weights():
-    """Constructs data frame containing strategy weights."""
-    df = pd.DataFrame({'Rule': ['EWMAC', 'EWMAC', 'EWMAC', 'CARRY'],
-                       'Variation': ['16,64', '32,128', '64,256', ''],
-                       'UnadjustedWeight': [0.21, 0.08, 0.21, 0.5],
-                       'CostAdjustment': [1, 1, 1, 1]
-                       })
+def get_strategy_info():
+    """Retrieves strategy information from Github."""
+    df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_Strategies.csv')
     df['AdjWeight'] = df['UnadjustedWeight'] * df['CostAdjustment']
-    df = df[['Rule', 'Variation', 'UnadjustedWeight', 'CostAdjustment', 'AdjWeight']]
+    df = df[['Rule', 'Variation', 'UnadjustedWeight', 'CostAdjustment', 'AdjWeight', 'ScalarPooled']]
     return df
 
 
@@ -180,7 +176,11 @@ def calc_ewma_forecasts(forecast_inputs, fast_days, slow_days):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the EWMAC strategies."""
     df = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
-    scalar_pooled = calc_ewmac_scalars(fast_days, slow_days)
+    variation = str(fast_days) + "," + str(slow_days)
+    strategies = get_strategy_info()
+    scalar_pooled = strategies.loc[strategies['Variation'] == variation]['ScalarPooled'].values[0]
+    # uncomment line below if scalar_pooled to recalculate
+    # scalar_pooled = calc_ewmac_scalars(fast_days, slow_days)
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
@@ -214,10 +214,13 @@ def calc_carry_scalars():
 def calc_carry_forecasts(forecast_inputs):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the carry strategies."""
-    df = calc_ewmac_crossovers(forecast_inputs)
-    scalar_pooled = calc_ewmac_scalars()
+    df = calc_carry_crossovers(forecast_inputs)
+    strategies = get_strategy_info()
+    scalar_pooled = strategies.loc[strategies['Rule'] == 'CARRY']['ScalarPooled'].values[0]
+    # uncomment line below if scalar_pooled to recalculate
+    # scalar_pooled = calc_ewmac_scalars()
     df['ScalarPooled'] = scalar_pooled
-    df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
+    df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
     df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
@@ -230,7 +233,7 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
     forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
     df = forecast_inputs.copy()
     # loop through strategies and add strategy forecasts as separate columns
-    strategies = get_strategy_weights()
+    strategies = get_strategy_info()
     for i in list(range(0, len(strategies))):
         if strategies.loc[i, 'Rule'] == 'EWMAC':
             fast = int(strategies.loc[i, 'Variation'].split(',')[0])
