@@ -241,7 +241,7 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
             strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
             df[strategy_name] = calc_ewmac_forecasts(forecast_inputs, fast, slow)['ForecastCapped']
         elif strategies.loc[i, 'Rule'] == 'CARRY':
-            strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
+            strategy_name = strategies.loc[i, 'Rule']
             df[strategy_name] = calc_carry_forecasts(forecast_inputs)['ForecastCapped']
 
     # calculate instrument forecast as weighted average of strategy forecasts
