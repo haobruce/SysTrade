@@ -55,7 +55,9 @@ def download_historical_prices(symbol):
     prices = quandl.get(full_name, authtoken=auth_token)
     prices = prices['Settle']
     # add contract_sort in order to sort by year then by month using contract name
-    prices = pd.DataFrame({'Settle': pd.Series(prices), 'Contract': symbol, 'Contract_Sort': symbol[-4:]+symbol[:3]})
+    prices = pd.DataFrame({'Settle': pd.Series(prices),
+                           'Contract': symbol,
+                           'Contract_Sort': symbol[-4:] + symbol[-5:-4] + symbol[:-5]})
     return prices
 
 
@@ -145,34 +147,41 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     df['ReturnDay'] = df['SettleRaw'] - df['SettleRaw'].shift(1)
     df = df[1:]  # drop first day without return
     df['ReturnDaySq'] = df['ReturnDay'] ** 2
-    df['Variance'] = df['ReturnDaySq']
-    # skip first row for volatility calculation
-    lambda_36 = 2 / (36 + 1)  # for 36 day look back
-    for i in list(range(1, df.shape[0])):
-        df['Variance'].iloc[i] = df['Variance'].iloc[i - 1] * (1 - lambda_36) + df['ReturnDaySq'].iloc[i] * lambda_36
+    df['Variance'] = pd.ewma(df['ReturnDaySq'], span=36)
     df['PriceVolatility'] = df['Variance'] ** 0.5
     df['PriceVolatilityPct'] = df['PriceVolatility'] / df['SettleRaw']
     return df
 
 
-def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
-    """Constructs data frame comprised of forecasts for a specified
+def calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days):
+    """Constructs data frame comprised of volatility adjusted crossovers for a specified
     forecasts_input data frame and speed parameters for the EWMAC strategies."""
     df = forecast_inputs.copy()
-    lambda_fast = 2 / (fast_days + 1)
-    lambda_slow = 2 / (slow_days + 1)
-    df['Fast'] = df['Settle']
-    df['Slow'] = df['Settle']
-    for i in list(range(1, df.shape[0])):
-        df['Fast'].iloc[i] = df['Fast'].iloc[i - 1] * (1 - lambda_fast) + df['Settle'].iloc[i] * lambda_fast
-        df['Slow'].iloc[i] = df['Slow'].iloc[i - 1] * (1 - lambda_slow) + df['Settle'].iloc[i] * lambda_slow
+    df['Fast'] = pd.ewma(df['Settle'], span=fast_days)
+    df['Slow'] = pd.ewma(df['Settle'], span=slow_days)
     df['RawCrossover'] = df['Fast'] - df['Slow']
     df['VolAdjCrossover'] = df['RawCrossover'] / df['PriceVolatility']
     df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCrossover']))
-    # *************************************************************************
-    # placeholder until replaced by function
-    df['ScalarPooled'] = df['ScalarUnpooled']
-    # *************************************************************************
+    return df
+
+
+def calc_ewmac_scalars(fast_days, slow_days):
+    """Calculates pooled scalar value for EWMAC strategies."""
+    scalar_list = []
+    symbols_list = get_futures_info()['Symbol'].tolist()
+    for symbol in symbols_list:
+        forecast_inputs = get_forecast_inputs(symbol)
+        ewmac_crossovers = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
+        scalar_list.append(ewmac_crossovers['ScalarUnpooled'][0])
+    return np.median(scalar_list)
+
+
+def calc_ewma_forecasts(forecast_inputs, fast_days, slow_days):
+    """Constructs data frame comprised of forecasts for a specified
+    forecasts_input data frame and speed parameters for the EWMAC strategies."""
+    df = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
+    scalar_pooled = calc_ewmac_scalars(fast_days, slow_days)
+    df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
@@ -180,7 +189,7 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     return df
 
 
-def calc_carry_forecasts(forecast_inputs):
+def calc_carry_crossovers(forecast_inputs):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data for the carry strategy."""
     df = forecast_inputs.copy()
@@ -188,25 +197,31 @@ def calc_carry_forecasts(forecast_inputs):
     df['PrevLessActiveAnn'] = df['PrevLessActive']
     df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
     df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCarry']))
-    # *************************************************************************
-    # placeholder until replaced by function
-    df['ScalarPooled'] = df['ScalarUnpooled']
-    # *************************************************************************
-    df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
+    return df
+
+
+def calc_carry_scalars():
+    """Calculates pooled scalar value for carry strategies."""
+    scalar_list = []
+    symbols_list = get_futures_info()['Symbol'].tolist()
+    for symbol in symbols_list:
+        forecast_inputs = get_forecast_inputs(symbol)
+        carry_crossovers = calc_carry_crossovers(forecast_inputs)
+        scalar_list.append(carry_crossovers['ScalarUnpooled'][0])
+    return np.median(scalar_list)
+
+
+def calc_carry_forecasts(forecast_inputs):
+    """Constructs data frame comprised of forecasts for a specified
+    forecasts_input data frame and speed parameters for the carry strategies."""
+    df = calc_ewmac_crossovers(forecast_inputs)
+    scalar_pooled = calc_ewmac_scalars()
+    df['ScalarPooled'] = scalar_pooled
+    df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
     df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
     df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
-
-
-# calculate ScalarPooled
-scalar_list = []
-symbols_list = get_futures_info()['Symbol'].tolist()
-for symbol in symbols_list:
-    forecast_inputs = get_forecast_inputs(symbol)
-    ewmac_forecasts = calc_ewmac_forecasts(forecast_inputs, 16, 64)
-    scalar_list.append(ewmac_forecasts['ScalarUnpooled'][0])
-np.median(scalar_list)
 
 
 def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
