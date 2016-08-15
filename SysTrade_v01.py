@@ -140,7 +140,7 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     df = df[pd.notnull(df['PrevSettleRaw'])]
 
     # add data for return volatility based on raw price data
-    df['ReturnDay'] = df['SettleRaw'] - df['SettleRaw'].shift(1)
+    df['ReturnDay'] = df['Settle'] - df['Settle'].shift(1)
     df = df[1:]  # drop first day without return
     df['ReturnDaySq'] = df['ReturnDay'] ** 2
     df['Variance'] = pd.ewma(df['ReturnDaySq'], span=36)
