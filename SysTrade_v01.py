@@ -93,20 +93,20 @@ def get_active_prices(symbol, full_prices):
     """Stitches together futures prices based on Panama Method."""
     df = get_active_contracts(symbol, full_prices)
     # add settle prices to most recent contract
-    contract = df['Contract'].sort_values(ascending=False).unique()[0]
-    prices = full_prices[full_prices['Contract'] == contract]
+    contract = df['Contract_Sort'].sort_values(ascending=False).unique()[0]
+    prices = full_prices[full_prices['Contract_Sort'] == contract]
     # add column for unadjusted settle prices for easier checking
-    df.loc[df['Contract'] == contract, 'SettleRaw'] = prices['Settle']
-    df.loc[df['Contract'] == contract, 'Settle'] = prices['Settle']
+    df.loc[df['Contract_Sort'] == contract, 'SettleRaw'] = prices['Settle']
+    df.loc[df['Contract_Sort'] == contract, 'Settle'] = prices['Settle']
     # stitch settle prices to remainder of contracts
-    for contract in df.sort_values('Contract_Sort', ascending=False)['Contract'].unique()[1:]:
-        prices = full_prices[full_prices['Contract'] == contract]
+    for contract in df['Contract_Sort'].sort_values(ascending=False).unique()[1:]:
+        prices = full_prices[full_prices['Contract_Sort'] == contract]
         df_prices = df[df['Settle'] == df['Settle']]  # exclude rows with missing prices
         df_prices = df_prices.loc[df_prices.index.isin(prices.index)]  # include only dates in both df and prices
         end_date = df_prices.index.min().to_pydatetime()  # identify earliest date
         adjustment = df['Settle'][end_date] - prices['Settle'][end_date]
-        df.loc[df['Contract'] == contract, 'SettleRaw'] = prices['Settle']
-        df.loc[df['Contract'] == contract, 'Settle'] = prices['Settle'] + adjustment
+        df.loc[df['Contract_Sort'] == contract, 'SettleRaw'] = prices['Settle']
+        df.loc[df['Contract_Sort'] == contract, 'Settle'] = prices['Settle'] + adjustment
     return df
 
 
@@ -278,7 +278,7 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
     end_year = dt.date.today().year
     min_date = pd.Timestamp(dt.date(1900, 1, 1))
     max_date = pd.Timestamp(dt.date.today())
-    instrument_weight = 1 / len(symbols_list)
+    instrument_weight = 1.0 / len(symbols_list)
     # *************************************************************************
     # change the multiplier to be dynamic based on number of instruments
     instrument_diversifier_multiplier = 1.41
@@ -301,7 +301,7 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
         df['GainLossCum'] = 0.0
         data_dict[symbol] = df
         if df.index.min() > min_date: min_date = df.index.min()
-        if df.index.max() < max_date: max_date = df.index.max()
+#        if df.index.max() < max_date: max_date = df.index.max()
 
     # construct data frame from min and max dates
     min_date += pd.Timedelta(days=90)  # start back test 90 days after min date to ensure ample data for forecasts
@@ -354,7 +354,11 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
                 if i != 0:  # skip first day; else set PositionCost equal to previous value
                     data_dict[key]['PositionCost'][active_date] = data_dict[key]['PositionCost'].loc[prev_date]
                 data_dict[key]['PositionCost'][active_date] += (ending_position - starting_position) * \
-                                                               block_size * block_price
+                                                                block_size * block_price
+                # reset PositionCost when contracts roll
+                if i != 0 and data_dict[key]['Contract'][active_date] != data_dict[key]['Contract'][prev_date]:
+                    data_dict[key]['PositionCost'][active_date] = ending_position * block_price * block_size - \
+                                                                  data_dict[key]['GainLossCum'][prev_date]
                 data_dict[key]['PositionValue'][active_date] = ending_position * block_size * block_price
                 data_dict[key]['GainLossCum'][active_date] = data_dict[key]['PositionValue'][active_date] - \
                                                              data_dict[key]['PositionCost'][active_date]
@@ -362,3 +366,20 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
                 prev_date = active_date
 
     return backtest_df, data_dict
+
+
+# run backtest
+#symbols_list = get_futures_info()['Symbol'][2:].tolist()
+#test = run_backtest(symbols_list)
+# Mac
+#test[0].to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
+#df = pd.DataFrame
+#for key in test[1].keys():
+#    df = df.append(test[1][key])
+#df.to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
+# Windows
+#test[0].to_csv('/Users/bhao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
+#df = pd.DataFrame
+#for key in test[1].keys():
+#    df = df.append(test[1][key])
+#df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
