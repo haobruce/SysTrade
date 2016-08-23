@@ -31,6 +31,8 @@ def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
     # append expiration month code to symbol name
     futures_info = get_futures_info()
     months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
+    if futures_info.loc[futures_info['Symbol'] == symbol]['YearLimit'].values[0] > start_year:
+        start_year = int(futures_info.loc[futures_info['Symbol'] == symbol]['YearLimit'].values[0])
 
     for y in range(start_year, end_year + 1):
         for m in months:
@@ -141,6 +143,7 @@ def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
 
     # add data for return volatility based on raw price data
     df['ReturnDay'] = df['Settle'] - df['Settle'].shift(1)
+    df['ReturnDayPct'] = df['Settle'] / df['Settle'].shift(1) - 1.0
     df = df[1:]  # drop first day without return
     df['ReturnDaySq'] = df['ReturnDay'] ** 2
     df['Variance'] = pd.ewma(df['ReturnDaySq'], span=36)
@@ -211,7 +214,7 @@ def calc_carry_scalars():
     return np.median(scalar_list)
 
 
-def calc_carry_forecasts(forecast_inputs):
+def calc_carry_forecasts(forecast_inputs, threshold=True):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the carry strategies."""
     df = calc_carry_crossovers(forecast_inputs)
@@ -221,9 +224,15 @@ def calc_carry_forecasts(forecast_inputs):
     # scalar_pooled = calc_ewmac_scalars()
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
-    df['ForecastCapped'] = df['Forecast']
-    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
-    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    if threshold:
+        df['ForecastCapped'] = (-np.sign(df['Forecast']) * 30.0 + 3.0 * df['Forecast'])
+        df['ForecastCapped'].loc[df['ForecastCapped'] > 30] = 30
+        df['ForecastCapped'].loc[df['ForecastCapped'] < -30] = -30
+        df['ForecastCapped'].loc[np.abs(df['Forecast']) <= 10] = 0
+    else:
+        df['ForecastCapped'] = df['Forecast']
+        df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+        df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
@@ -262,20 +271,19 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
     df['InstrumentValueVol'] = df['InstrumentCurVol']
     # *************************************************************************
 
-    return df[['Symbol', 'Contract', 'SettleRaw', 'PriceVolatility', 'PriceVolatilityPct', 'InstrumentForecast',
-               'BlockSize', 'BlockValue', 'InstrumentValueVol']]
+    return df[['Symbol', 'Contract', 'SettleRaw', 'ReturnDayPct', 'PriceVolatility', 'PriceVolatilityPct',
+               'InstrumentForecast', 'BlockSize', 'BlockValue', 'InstrumentValueVol']]
 
 
 # *************************************************************************
 # set end_year = current year; start_date = beginning of previous year
 # *************************************************************************
-def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), starting_capital = 100000,
-                 volatility_target = 0.25):
+def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
+                 starting_capital=100000, volatility_target = 0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
     # set scalar variables
     start_year = start_date.year
-    end_year = dt.date.today().year
     min_date = pd.Timestamp(dt.date(1900, 1, 1))
     max_date = pd.Timestamp(dt.date.today())
     instrument_weight = 1.0 / len(symbols_list)
@@ -369,17 +377,18 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), star
 
 
 # run backtest
-#symbols_list = get_futures_info()['Symbol'][2:].tolist()
-#test = run_backtest(symbols_list)
+# symbols_list = get_futures_info()['Symbol'][2:].tolist()
+# symbols_list = symbols_list[:-1] # remove KR3 since not available on Quandl
+# test = run_backtest(symbols_list, dt.date(2006,1,1))
 # Mac
 #test[0].to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
-#df = pd.DataFrame
+#df = pd.DataFrame()
 #for key in test[1].keys():
 #    df = df.append(test[1][key])
 #df.to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
 # Windows
-#test[0].to_csv('/Users/bhao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
-#df = pd.DataFrame
-#for key in test[1].keys():
-#    df = df.append(test[1][key])
+# test[0].to_csv('/Users/bhao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
+# df = pd.DataFrame()
+# for key in test[1].keys():
+#     df = df.append(test[1][key])
 #df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
