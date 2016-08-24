@@ -23,6 +23,14 @@ def get_strategy_info():
     return df
 
 
+def get_correlation_matrix(symbols_list):
+    """Retrieves futures contract correlation matrix from Github."""
+    df = pd.read_csv('https://raw.githubusercontent.com/haobruce/SysTrade/master/SysTrade_CorrelationMatrix.csv')
+    df.set_index('Symbol', inplace=True)
+    df = df.loc[symbols_list][symbols_list]
+    return df
+
+
 def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
     """Constructs a list of futures contract codes for a
     particular symbol and time frame."""
@@ -112,34 +120,72 @@ def get_active_prices(symbol, full_prices):
     return df
 
 
+def get_active_prices_csv(symbol):
+    """Stitches together futures prices based on Panama Method."""
+    contracts_df = pd.DataFrame({'Contract': construct_futures_symbols(symbol)})
+    contracts_df['Contract_Sort'] = contracts_df['Contract'].str[-4:] + contracts_df['Contract'].str[-5:-4] + \
+                                    contracts_df['Contract'].str[:-5]
+    contracts_df.sort_values('Contract_Sort', ascending=False, inplace=True)
+
+    df = pd.DataFrame()
+    df_temp = pd.DataFrame()
+    for contract in contracts_df.sort_values('Contract_Sort', ascending=False)['Contract']:
+        url = 'https://raw.githubusercontent.com/haobruce/SysTrade/master/' + symbol + '/' + contract + '.csv'
+        try:
+            df_temp = pd.read_csv(url)
+            df_temp['Date'] = pd.to_datetime(df_temp['Date'])
+            df_temp.set_index('Date', inplace=True)
+            df_temp.insert(0, 'Symbol', symbol)
+            df_temp.insert(1, 'Contract', contract)
+            df_temp.rename(columns={'Close': 'Settle'}, inplace=True)
+            df_temp['SettleRaw'] = df_temp['Settle']
+            if len(df) == 0:  # capture data for most recent contract
+                df = df.append(df_temp)
+            else:
+                start_date = df_temp.index.sort_values(ascending=False)[0]
+                adjustment = df['Settle'][start_date] - df_temp['Settle'][start_date]
+                df_temp['Settle'] += adjustment
+                df = df[:start_date][:-1]  # delete dates from df that overlaps with df_temp
+                df = df.append(df_temp)
+        except:
+            pass
+
+    return df
+
+
 def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     """Constructs data frame with necessary data for all strategy forecast
      calculations, e.g. EWMAC, carry, etc."""
-    full_prices = compile_historical_prices(symbol, start_year, end_year)
-    # get data for active contract
-    df = get_active_prices(symbol, full_prices)
-    # add month and year to data frame
-    df['Month'] = df['Contract'].str[-5]
-    df['Year'] = pd.to_numeric(df['Contract'].str[-4:])
-
-    # add previous month
     futures_info = get_futures_info()
-    months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
-    for i, month in enumerate(months):
-        if i == 0:  # first month
-            df.loc[df['Month'] == month, 'PrevMonth'] = months[-1]
-            df.loc[df['Month'] == month, 'Year'] = df['Year']-1
-        else:
-            df.loc[df['Month'] == month, 'PrevMonth'] = months[i-1]
+    price_source = futures_info.loc[futures_info['Symbol'] == symbol]['PriceSource'].values[0]
+    if price_source != 'csv':
+        full_prices = compile_historical_prices(symbol, start_year, end_year)
+        # get data for active contract
+        df = get_active_prices(symbol, full_prices)
+        # add month and year to data frame
+        df['Month'] = df['Contract'].str[-5]
+        df['Year'] = pd.to_numeric(df['Contract'].str[-4:])
 
-    # add data for prev contract
-    df['PrevContract'] = df['Symbol'] + df['PrevMonth'] + df['Year'].astype(str)
-    # add raw settle prices for prev contract
-    for contract in df['PrevContract'].unique()[::-1]:
-        prices = full_prices[full_prices['Contract'] == contract]
-        df.loc[df['PrevContract'] == contract, 'PrevSettleRaw'] = prices['Settle']
-    # remove NaN rows as some contracts have longer histories than others
-    df = df[pd.notnull(df['PrevSettleRaw'])]
+        # add previous month
+        futures_info = get_futures_info()
+        months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
+        for i, month in enumerate(months):
+            if i == 0:  # first month
+                df.loc[df['Month'] == month, 'PrevMonth'] = months[-1]
+                df.loc[df['Month'] == month, 'Year'] = df['Year']-1
+            else:
+                df.loc[df['Month'] == month, 'PrevMonth'] = months[i-1]
+
+        # add data for prev contract
+        df['PrevContract'] = df['Symbol'] + df['PrevMonth'] + df['Year'].astype(str)
+        # add raw settle prices for prev contract
+        for contract in df['PrevContract'].unique()[::-1]:
+            prices = full_prices[full_prices['Contract'] == contract]
+            df.loc[df['PrevContract'] == contract, 'PrevSettleRaw'] = prices['Settle']
+        # remove NaN rows as some contracts have longer histories than others
+        df = df[pd.notnull(df['PrevSettleRaw'])]
+    else:
+        df = get_active_prices_csv(symbol)
 
     # add data for return volatility based on raw price data
     df['ReturnDay'] = df['Settle'] - df['Settle'].shift(1)
@@ -175,7 +221,7 @@ def calc_ewmac_scalars(fast_days, slow_days):
     return np.median(scalar_list)
 
 
-def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
+def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days, threshold=True):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the EWMAC strategies."""
     df = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
@@ -186,9 +232,15 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     # scalar_pooled = calc_ewmac_scalars(fast_days, slow_days)
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
-    df['ForecastCapped'] = df['Forecast']
-    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
-    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    if threshold:
+        df['ForecastCapped'] = (-np.sign(df['Forecast']) * 30.0 + 3.0 * df['Forecast'])
+        df['ForecastCapped'].loc[df['ForecastCapped'] > 30] = 30
+        df['ForecastCapped'].loc[df['ForecastCapped'] < -30] = -30
+        df['ForecastCapped'].loc[np.abs(df['Forecast']) <= 10] = 0
+    else:
+        df['ForecastCapped'] = df['Forecast']
+        df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+        df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
@@ -236,7 +288,7 @@ def calc_carry_forecasts(forecast_inputs, threshold=True):
     return df
 
 
-def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
+def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016, threshold=True):
     """Constructs data frame comprised of instrument forecasts based on available
     strategies and weights."""
     forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
@@ -248,10 +300,13 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
             fast = int(strategies.loc[i, 'Variation'].split(',')[0])
             slow = int(strategies.loc[i, 'Variation'].split(',')[1])
             strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
-            df[strategy_name] = calc_ewmac_forecasts(forecast_inputs, fast, slow)['ForecastCapped']
+            df[strategy_name] = calc_ewmac_forecasts(forecast_inputs, fast, slow, threshold)['ForecastCapped']
         elif strategies.loc[i, 'Rule'] == 'CARRY':
             strategy_name = strategies.loc[i, 'Rule']
-            df[strategy_name] = calc_carry_forecasts(forecast_inputs)['ForecastCapped']
+            if symbol == '3KTB':  # no carry calc for 3KTB since only one contract trades at a time
+                df[strategy_name] = df.iloc[:, -3:].mean(axis=1) # set carry forecast equal to mean of ewmac
+            else:
+                df[strategy_name] = calc_carry_forecasts(forecast_inputs, threshold)['ForecastCapped']
 
     # calculate instrument forecast as weighted average of strategy forecasts
     forecasts = df[['EWMAC16,64', 'EWMAC32,128', 'EWMAC64,256', 'CARRY']]
@@ -263,23 +318,22 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016):
     df['BlockSize'] = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize'].values[0]
     df['BlockValue'] = df['SettleRaw'] * df['BlockSize'] * 0.01
     df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPct'] * 100
-
-    # *************************************************************************
-    # need to add functionality to handle historical exchange rates
-    # update instrument value volatility once exchange rates are available
-    exchange_rate = futures_info.loc[futures_info['Symbol'] == symbol, 'FX']
-    df['InstrumentValueVol'] = df['InstrumentCurVol']
-    # *************************************************************************
+    # incorporate historical fx rates
+    fx_symbol = futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
+    if fx_symbol != 'USD':
+        fx_symbol = 'CURRFX/USD' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
+        fx_rates = quandl.get(fx_symbol)
+        df = df.merge(fx_rates, how='left', left_index=True, right_index=True)
+    else:
+        df['Rate'] = 1.0
+    df['InstrumentValueVol'] = df['InstrumentCurVol'] / df['Rate']
 
     return df[['Symbol', 'Contract', 'SettleRaw', 'ReturnDayPct', 'PriceVolatility', 'PriceVolatilityPct',
-               'InstrumentForecast', 'BlockSize', 'BlockValue', 'InstrumentValueVol']]
+               'InstrumentForecast', 'BlockSize', 'BlockValue', 'InstrumentValueVol', 'Rate']]
 
 
-# *************************************************************************
-# set end_year = current year; start_date = beginning of previous year
-# *************************************************************************
 def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
-                 starting_capital=100000, volatility_target = 0.25):
+                 starting_capital=100000.0, volatility_target=0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
     # set scalar variables
@@ -287,10 +341,11 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
     min_date = pd.Timestamp(dt.date(1900, 1, 1))
     max_date = pd.Timestamp(dt.date.today())
     instrument_weight = 1.0 / len(symbols_list)
-    # *************************************************************************
-    # change the multiplier to be dynamic based on number of instruments
-    instrument_diversifier_multiplier = 1.41
-    # *************************************************************************
+    # calculate diversification multiplier
+    correlations = get_correlation_matrix(symbols_list)
+    weights = pd.DataFrame({'Symbol': symbols_list, 'Weight': instrument_weight})
+    weights.set_index('Symbol', inplace=True)
+    instrument_diversifier_multiplier = 1.0 / weights.transpose().dot(correlations.dot(weights)).values[0,0] ** 0.5
     position_inertia = 0.1
 
     # construct dictionary to combine forecast with position and gain loss
@@ -353,6 +408,7 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
                 system_position = data_dict[key]['SystemPosition'][active_date]
                 block_size = data_dict[key]['BlockSize'][active_date]
                 block_price = data_dict[key]['SettleRaw'][active_date]
+                fx_rate = data_dict[key]['Rate'][active_date]
 
                 if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) >
                                                   position_inertia):
@@ -366,10 +422,10 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
                 # reset PositionCost when contracts roll
                 if i != 0 and data_dict[key]['Contract'][active_date] != data_dict[key]['Contract'][prev_date]:
                     data_dict[key]['PositionCost'][active_date] = ending_position * block_price * block_size - \
-                                                                  data_dict[key]['GainLossCum'][prev_date]
+                                                                  (data_dict[key]['GainLossCum'][prev_date] * fx_rate)
                 data_dict[key]['PositionValue'][active_date] = ending_position * block_size * block_price
-                data_dict[key]['GainLossCum'][active_date] = data_dict[key]['PositionValue'][active_date] - \
-                                                             data_dict[key]['PositionCost'][active_date]
+                data_dict[key]['GainLossCum'][active_date] = (data_dict[key]['PositionValue'][active_date] -
+                                                             data_dict[key]['PositionCost'][active_date]) / fx_rate
 
                 prev_date = active_date
 
@@ -381,14 +437,14 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
 # symbols_list = symbols_list[:-1] # remove KR3 since not available on Quandl
 # test = run_backtest(symbols_list, dt.date(2006,1,1))
 # Mac
-#test[0].to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
-#df = pd.DataFrame()
-#for key in test[1].keys():
+# test[0].to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
+# df = pd.DataFrame()
+# for key in test[1].keys():
 #    df = df.append(test[1][key])
-#df.to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
+# df.to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
 # Windows
 # test[0].to_csv('/Users/bhao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
 # df = pd.DataFrame()
 # for key in test[1].keys():
 #     df = df.append(test[1][key])
-#df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
+# df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
