@@ -1,13 +1,21 @@
-Include,InstrumentName,Symbol,BlockSize,FX,MarginRequirement,ExpMonths,Exchange,YearLimit,PriceSource
-N,S&P500 emini,ES,50,USD,5250,HMUZ,CME,,Quandl
-N,10-Year UST,TY,1000,USD,1562,HMUZ,CME,,Quandl
-Y,Eurodollar,ED,2500,USD,437.5,HMUZ,CME,,Quandl
-Y,Mexican Peso,MP,0.5,USD,1937.5,HMUZ,CME,,Quandl
-Y,Corn,C,50,USD,1562.5,HKNUZ,CME,,Quandl
-Y,Corn Mini,YC,10,USD,350,HKNUZ,CME,2014,Quandl
-Y,EUROSTX,FESX,10,EUR,3169.65,HMUZ,EUREX,,Quandl
-Y,NatGas US,NG,10000,USD,2268.75,FGHJKMNQUVXZ,CME,,Quandl
-Y,Plat,PL,50,USD,3000,FJNV,CME,,Quandl
-Y,VIX,VX,1000,USD,5018.75,FGHJKMNQUVXZ,CBOE,2007,Quandl
-Y,V2TX,FVS,100,EUR,1050,FGHJKMNQUVXZ,EUREX,2014,Quandl
-Y,KR3,3KTB,1000000,KRW,832950,HMUZ,KSE,2015,csv
+Include,AssetClass,InstrumentName,Symbol,BlockSize,FX,MarginRequirement,ExpMonths,YearLimit,Exchange,PriceSource
+Y,Commodities,Corn,C,50,USD,1562.5,HKNUZ,,CME,Quandl
+Y,Commodities,Corn mini,YC,10,USD,350,HKNUZ,2014,CME,Quandl
+Y,Commodities,Crude Oil emini,QM,500,USD,2120,FGHJKMNQUVXZ,2014,CME,Quandl
+Y,Commodities,Gold emicro,MGC,10,USD,675,GJMQVZ,2014,CME,Quandl
+Y,Commodities,Natural Gas,NG,10000,USD,2268.75,FGHJKMNQUVXZ,,CME,Quandl
+Y,Commodities,Natural Gas emini,QG,2500,USD,692.55,FGHJKMNQUVXZ,2014,CME,Quandl
+Y,Commodities,Plat,PL,50,USD,3000,FJNV,,CME,Quandl
+Y,Commodities,Soybean Mini,YK,10,USD,775,FHKNQUX,2014,CME,Quandl
+Y,Equities,Dow Jones emini,YM,5,USD,4437.5,HMUZ,,CME,Quandl
+Y,Equities,EUROSTX,FESX,10,EUR,3169.65,HMUZ,,EUREX,Quandl
+Y,Equities,NASDAQ 100 emini,NQ,20,USD,4500,HMUZ,,CME,Quandl
+Y,Equities,S&P500 emini,ES,50,USD,5250,HMUZ,,CME,Quandl
+Y,FX,Euro FX emini,E7,62500,USD,3462.5,MU,2014,CME,Quandl
+Y,FX,Japanese Yen emini,J7,6250000,USD,2562.5,MU,2014,CME,Quandl
+Y,FX,Mexican Peso,MP,0.5,USD,1937.5,HMUZ,,CME,Quandl
+Y,Rates,10-Year UST,TY,1000,USD,1562,HMUZ,,CME,Quandl
+Y,Rates,Eurodollar,ED,2500,USD,437.5,HMUZ,,CME,Quandl
+Y,Rates,KR3,3KTB,1000000,KRW,5018.75,HMUZ,2015,KSE,csv
+Y,Volatility,V2TX,FVS,100,EUR,5018.75,FGHJKMNQUVXZ,2014,EUREX,Quandl
+Y,Volatility,VIX,VX,1000,USD,5018.75,FGHJKMNQUVXZ,2007,CBOE,Quandl
