@@ -31,7 +31,7 @@ def get_correlation_matrix(symbols_list):
     return df
 
 
-def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
+def construct_futures_symbols(symbol, start_year=2015, end_year=2016):
     """Constructs a list of futures contract codes for a
     particular symbol and time frame."""
     futures = []
@@ -57,17 +57,21 @@ def download_historical_prices(symbol):
     prefix = futures_info['Exchange'].loc[futures_info['Symbol'] == symbol[:-5]].values[0]  # strip off month and year
     full_name = prefix + '/' + symbol
 
-    # download prices from quandl using full_name
-    prices = quandl.get(full_name, authtoken=auth_token)
-    prices = prices['Settle']
-    # add contract_sort in order to sort by year then by month using contract name
-    prices = pd.DataFrame({'Settle': pd.Series(prices),
-                           'Contract': symbol,
-                           'Contract_Sort': symbol[-4:] + symbol[-5:-4] + symbol[:-5]})
+    prices = pd.DataFrame()
+    try:
+        # download prices from quandl using full_name
+        prices = quandl.get(full_name, authtoken=auth_token)
+        prices = prices['Settle']
+        # add contract_sort in order to sort by year then by month using contract name
+        prices = pd.DataFrame({'Settle': pd.Series(prices),
+                               'Contract': symbol,
+                               'Contract_Sort': symbol[-4:] + symbol[-5:-4] + symbol[:-5]})
+    except:
+        pass
     return prices
 
 
-def compile_historical_prices(symbol, start_year=2006, end_year=2016):
+def compile_historical_prices(symbol, start_year=2015, end_year=2016):
     """Combines futures pricing data for contracts within specified date range
     for a specific symbol."""
     symbol_list = construct_futures_symbols(symbol, start_year, end_year)
@@ -149,11 +153,10 @@ def get_active_prices_csv(symbol):
                 df = df.append(df_temp)
         except:
             pass
-
     return df
 
 
-def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
+def get_forecast_inputs(symbol, start_year=2015, end_year=2016):
     """Constructs data frame with necessary data for all strategy forecast
      calculations, e.g. EWMAC, carry, etc."""
     futures_info = get_futures_info()
@@ -213,15 +216,17 @@ def calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days):
 def calc_ewmac_scalars(fast_days, slow_days):
     """Calculates pooled scalar value for EWMAC strategies."""
     scalar_list = []
-    symbols_list = get_futures_info()['Symbol'].tolist()
+    symbols_list = get_futures_info()
+    symbols_list = symbols_list.loc[symbols_list['Include'] == 'Y']['Symbol'].tolist()
     for symbol in symbols_list:
         forecast_inputs = get_forecast_inputs(symbol)
         ewmac_crossovers = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
         scalar_list.append(ewmac_crossovers['ScalarUnpooled'][0])
+    # consider weighting instrument scalars by number of periods available for each scalar
     return np.median(scalar_list)
 
 
-def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days, threshold=True):
+def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the EWMAC strategies."""
     df = calc_ewmac_crossovers(forecast_inputs, fast_days, slow_days)
@@ -232,63 +237,58 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days, threshold=True):
     # scalar_pooled = calc_ewmac_scalars(fast_days, slow_days)
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
-    if threshold:
-        df['ForecastCapped'] = (-np.sign(df['Forecast']) * 30.0 + 3.0 * df['Forecast'])
-        df['ForecastCapped'].loc[df['ForecastCapped'] > 30] = 30
-        df['ForecastCapped'].loc[df['ForecastCapped'] < -30] = -30
-        df['ForecastCapped'].loc[np.abs(df['Forecast']) <= 10] = 0
-    else:
-        df['ForecastCapped'] = df['Forecast']
-        df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
-        df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    df['ForecastCapped'] = df['Forecast']
+    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
-def calc_carry_crossovers(forecast_inputs):
+def calc_carry_est_profits(forecast_inputs):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data for the carry strategy."""
     df = forecast_inputs.copy()
     df['PrevLessActive'] = df['PrevSettleRaw'] - df['SettleRaw']
-    df['PrevLessActiveAnn'] = df['PrevLessActive']
+    months = 'FGHJKMNQUVXZ'
+    distance_array = 12.0 / (np.char.find(months, df['Contract'].str[-5]) -
+                             np.char.find(months, df['PrevContract'].str[-5]))
+    distance_array[distance_array < 0] += 12
+    df['Distance'] = distance_array
+    df['PrevLessActiveAnn'] = df['PrevLessActive'] * df['Distance']
     df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
-    df['ScalarUnpooled'] = 10 / np.nanmedian(np.abs(df['VolAdjCarry']))
+    df['ScalarUnpooled'] = 10.0 / np.nanmedian(np.abs(df['VolAdjCarry']))
     return df
 
 
 def calc_carry_scalars():
     """Calculates pooled scalar value for carry strategies."""
     scalar_list = []
-    symbols_list = get_futures_info()['Symbol'].tolist()
+    symbols_list = get_futures_info()
+    symbols_list = symbols_list.loc[symbols_list['Include'] == 'Y']['Symbol'].tolist()
     for symbol in symbols_list:
         forecast_inputs = get_forecast_inputs(symbol)
-        carry_crossovers = calc_carry_crossovers(forecast_inputs)
-        scalar_list.append(carry_crossovers['ScalarUnpooled'][0])
+        carry_est_profits = calc_carry_est_profits(forecast_inputs)
+        scalar_list.append(carry_est_profits['ScalarUnpooled'][0])
+    # consider weighting instrument scalars by number of periods available for each scalar
     return np.median(scalar_list)
 
 
-def calc_carry_forecasts(forecast_inputs, threshold=True):
+def calc_carry_forecasts(forecast_inputs):
     """Constructs data frame comprised of forecasts for a specified
     forecasts_input data frame and speed parameters for the carry strategies."""
-    df = calc_carry_crossovers(forecast_inputs)
+    df = calc_carry_est_profits(forecast_inputs)
     strategies = get_strategy_info()
     scalar_pooled = strategies.loc[strategies['Rule'] == 'CARRY']['ScalarPooled'].values[0]
     # uncomment line below if scalar_pooled to recalculate
-    # scalar_pooled = calc_ewmac_scalars()
+    # scalar_pooled = calc_carry_scalars()
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
-    if threshold:
-        df['ForecastCapped'] = (-np.sign(df['Forecast']) * 30.0 + 3.0 * df['Forecast'])
-        df['ForecastCapped'].loc[df['ForecastCapped'] > 30] = 30
-        df['ForecastCapped'].loc[df['ForecastCapped'] < -30] = -30
-        df['ForecastCapped'].loc[np.abs(df['Forecast']) <= 10] = 0
-    else:
-        df['ForecastCapped'] = df['Forecast']
-        df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
-        df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
+    df['ForecastCapped'] = df['Forecast']
+    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
-def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016, threshold=True):
+def calc_instrument_forecasts(symbol, start_year=2015, end_year=2016, threshold=False):
     """Constructs data frame comprised of instrument forecasts based on available
     strategies and weights."""
     forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
@@ -300,13 +300,23 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016, threshold=
             fast = int(strategies.loc[i, 'Variation'].split(',')[0])
             slow = int(strategies.loc[i, 'Variation'].split(',')[1])
             strategy_name = strategies.loc[i, 'Rule'] + strategies.loc[i, 'Variation']
-            df[strategy_name] = calc_ewmac_forecasts(forecast_inputs, fast, slow, threshold)['ForecastCapped']
+            df[strategy_name + 'Forecast'] = calc_ewmac_forecasts(forecast_inputs, fast, slow)['ForecastCapped']
         elif strategies.loc[i, 'Rule'] == 'CARRY':
             strategy_name = strategies.loc[i, 'Rule']
             if symbol == '3KTB':  # no carry calc for 3KTB since only one contract trades at a time
-                df[strategy_name] = df.iloc[:, -3:].mean(axis=1) # set carry forecast equal to mean of ewmac
+                df[strategy_name + 'Forecast'] = 0.0
+                # set carry forecast equal to mean of ewmac forecasts
+                # df[strategy_name + 'Forecast'] = (df['EWMAC16,64Forecast'] + df['EWMAC32,128Forecast'] +
+                #                                   df['EWMAC64,256Forecast']) / 3.0
             else:
-                df[strategy_name] = calc_carry_forecasts(forecast_inputs, threshold)['ForecastCapped']
+                df[strategy_name + 'Forecast'] = calc_carry_forecasts(forecast_inputs)['ForecastCapped']
+        if threshold:
+            df[strategy_name] = (-np.sign(df[strategy_name + 'Forecast']) * 30.0 + 3.0 * df[strategy_name + 'Forecast'])
+            df[strategy_name].loc[df[strategy_name] > 30] = 30
+            df[strategy_name].loc[df[strategy_name] < -30] = -30
+            df[strategy_name].loc[np.abs(df[strategy_name + 'Forecast']) <= 10] = 0
+        else:
+            df[strategy_name] = df[strategy_name + 'Forecast']
 
     # calculate instrument forecast as weighted average of strategy forecasts
     forecasts = df[['EWMAC16,64', 'EWMAC32,128', 'EWMAC64,256', 'CARRY']]
@@ -327,13 +337,12 @@ def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016, threshold=
     else:
         df['Rate'] = 1.0
     df['InstrumentValueVol'] = df['InstrumentCurVol'] / df['Rate']
-
     return df[['Symbol', 'Contract', 'SettleRaw', 'ReturnDayPct', 'PriceVolatility', 'PriceVolatilityPct',
                'InstrumentForecast', 'BlockSize', 'BlockValue', 'InstrumentValueVol', 'Rate']]
 
 
-def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
-                 starting_capital=100000.0, volatility_target=0.25):
+def run_backtest(symbols_list=['ED', 'FVS', 'MGC', 'YC'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
+                 starting_capital=15000.0, volatility_target=0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
     # set scalar variables
@@ -391,7 +400,6 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
                     backtest_df['PortfolioValue'][active_date] = starting_capital + backtest_df['TotalGainLoss'][active_date]
                     backtest_df['DailyCashTargetVol'][active_date] = backtest_df['PortfolioValue'][active_date] * \
                                                                      volatility_target / (256 ** 0.5)
-
                 data_dict[key]['VolatilityScalar'][active_date] = backtest_df['DailyCashTargetVol'][active_date] / \
                                                                   data_dict[key]['InstrumentValueVol'][active_date]
                 data_dict[key]['SubsystemPosition'][active_date] = data_dict[key]['InstrumentForecast'][active_date] / \
@@ -426,10 +434,33 @@ def run_backtest(symbols_list=['ES', 'TY'], start_date=dt.date(2015, 1, 1), end_
                 data_dict[key]['PositionValue'][active_date] = ending_position * block_size * block_price
                 data_dict[key]['GainLossCum'][active_date] = (data_dict[key]['PositionValue'][active_date] -
                                                              data_dict[key]['PositionCost'][active_date]) / fx_rate
-
                 prev_date = active_date
-
     return backtest_df, data_dict
+
+
+def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capital=15000.0, volatility_target=0.25):
+    """Calculates position targets for actual trading."""
+    # set scalar variables
+    instrument_weight = 1.0 / len(symbols_list)
+    # calculate diversification multiplier
+    correlations = get_correlation_matrix(symbols_list)
+    weights = pd.DataFrame({'Symbol': symbols_list, 'Weight': instrument_weight})
+    weights.set_index('Symbol', inplace=True)
+    instrument_diversifier_multiplier = 1.0 / weights.transpose().dot(correlations.dot(weights)).values[0,0] ** 0.5
+
+    df = pd.DataFrame()
+    for symbol in symbols_list:
+        forecast = calc_instrument_forecasts(symbol)
+        df = df.append(forecast.iloc[-1])
+
+    df['PortfolioValue'] = starting_capital
+    df['DailyCashTargetVol'] = df['PortfolioValue'] * volatility_target / (256 ** 0.5)
+    df['VolatilityScalar'] = df['DailyCashTargetVol'] / df['InstrumentValueVol']
+    df['SubsystemPosition'] = df['InstrumentForecast'] /10.0 * df['VolatilityScalar']
+    df['InstrumentWeight'] = instrument_weight
+    df['InstrumentDiversifierMultiplier'] = instrument_diversifier_multiplier
+    df['SystemPosition'] = df['SubsystemPosition'] * instrument_weight * instrument_diversifier_multiplier
+    return df
 
 
 # run backtest
