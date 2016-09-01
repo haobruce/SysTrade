@@ -31,7 +31,7 @@ def get_correlation_matrix(symbols_list):
     return df
 
 
-def construct_futures_symbols(symbol, start_year=2015, end_year=2016):
+def construct_futures_symbols(symbol, start_year=2006, end_year=2016):
     """Constructs a list of futures contract codes for a
     particular symbol and time frame."""
     futures = []
@@ -71,7 +71,7 @@ def download_historical_prices(symbol):
     return prices
 
 
-def compile_historical_prices(symbol, start_year=2015, end_year=2016):
+def compile_historical_prices(symbol, start_year=2006, end_year=2016):
     """Combines futures pricing data for contracts within specified date range
     for a specific symbol."""
     symbol_list = construct_futures_symbols(symbol, start_year, end_year)
@@ -156,7 +156,7 @@ def get_active_prices_csv(symbol):
     return df
 
 
-def get_forecast_inputs(symbol, start_year=2015, end_year=2016):
+def get_forecast_inputs(symbol, start_year=2006, end_year=2016):
     """Constructs data frame with necessary data for all strategy forecast
      calculations, e.g. EWMAC, carry, etc."""
     futures_info = get_futures_info()
@@ -248,13 +248,15 @@ def calc_carry_est_profits(forecast_inputs):
     forecasts_input data for the carry strategy."""
     df = forecast_inputs.copy()
     df['PrevLessActive'] = df['PrevSettleRaw'] - df['SettleRaw']
+    # since time between contracts can vary whereas ewma crossovers are all daily,
+    # carry forecast is normalized by annualizing estimated profit and dividing by annualized volatility
     months = 'FGHJKMNQUVXZ'
     distance_array = 12.0 / (np.char.find(months, df['Contract'].str[-5]) -
                              np.char.find(months, df['PrevContract'].str[-5]))
     distance_array[distance_array < 0] += 12
     df['Distance'] = distance_array
     df['PrevLessActiveAnn'] = df['PrevLessActive'] * df['Distance']
-    df['VolAdjCarry'] = df['PrevLessActiveAnn'] / df['PriceVolatility']
+    df['VolAdjCarry'] = df['PrevLessActiveAnn'] / (df['PriceVolatility'] * 16)
     df['ScalarUnpooled'] = 10.0 / np.nanmedian(np.abs(df['VolAdjCarry']))
     return df
 
@@ -288,7 +290,7 @@ def calc_carry_forecasts(forecast_inputs):
     return df
 
 
-def calc_instrument_forecasts(symbol, start_year=2015, end_year=2016, threshold=False):
+def calc_instrument_forecasts(symbol, start_year=2006, end_year=2016, threshold=False):
     """Constructs data frame comprised of instrument forecasts based on available
     strategies and weights."""
     forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
