@@ -1,5 +1,5 @@
 Rule,Variation,UnadjustedWeight,CostAdjustment,ScalarPooled
-EWMAC,"16,64",0.21,1,5.05
-EWMAC,"32,128",0.08,1,3.41
-EWMAC,"64,256",0.21,1,2.37
-CARRY,,0.5,1,31.54
+EWMAC,"2,8",0.21,1,10.6
+EWMAC,"16,64",0.21,1,3.75
+EWMAC,"64,256",0.21,1,1.87
+CARRY,,0.5,1,30
