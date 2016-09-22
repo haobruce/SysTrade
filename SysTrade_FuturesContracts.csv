@@ -1,7 +1,7 @@
 Include,AssetClass,InstrumentName,Symbol,BlockSize,FX,MarginRequirement,ExpMonths,TradedContract,YearLimit,Exchange,PriceSource
 Y,Commodities,Corn,C,50,USD,1562.5,HKNUZ,2,,CME,Quandl
 Y,Commodities,Corn mini,YC,10,USD,350,HKNUZ,2,2014,CME,Quandl
-Y,Commodities,Crude Oil emini,QM,500,USD,2120,FGHJKMNQUVXZ,2,2014,CME,Quandl
+Y,Commodities,Crude Oil emini,QM,500,USD,2120,MZ,2,2014,CME,Quandl
 Y,Commodities,Gold emicro,MGC,10,USD,675,GJMQVZ,2,2014,CME,Quandl
 Y,Commodities,Natural Gas,NG,10000,USD,2268.75,FGHJKMNQUVXZ,2,,CME,Quandl
 Y,Commodities,Natural Gas emini,QG,2500,USD,692.55,FGHJKMNQUVXZ,2,2014,CME,Quandl
