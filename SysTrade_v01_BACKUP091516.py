@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import math
 import datetime as dt
 # import urllib2
 import quandl
@@ -8,7 +7,7 @@ import yagmail
 
 
 # set display width
-pd.set_option('display.width', 120)
+pd.set_option('display.width', 100)
 
 
 def get_futures_info():
@@ -33,16 +32,16 @@ def get_correlation_matrix(symbols_list):
     return df
 
 
-def construct_futures_symbols(symbol, start_year=2015, end_year=dt.date.today().year):
+def construct_futures_symbols(symbol, start_year=2015, end_year=2016):
     """Constructs a list of futures contract codes for a
     particular symbol and time frame."""
     futures = []
+
     # append expiration month code to symbol name
     futures_info = get_futures_info()
     months = futures_info['ExpMonths'].loc[futures_info['Symbol'] == symbol].values[0]
     if futures_info.loc[futures_info['Symbol'] == symbol]['YearLimit'].values[0] > start_year:
         start_year = int(futures_info.loc[futures_info['Symbol'] == symbol]['YearLimit'].values[0])
-    end_year += math.ceil(futures_info.loc[futures_info['Symbol'] == symbol]['TradedContract'].values[0] / len(months))
 
     for y in range(start_year, end_year + 1):
         for m in months:
@@ -73,7 +72,7 @@ def download_historical_prices(symbol):
     return prices
 
 
-def compile_historical_prices(symbol, start_year=2015, end_year=dt.date.today().year):
+def compile_historical_prices(symbol, start_year=2015, end_year=2016):
     """Combines futures pricing data for contracts within specified date range
     for a specific symbol."""
     symbol_list = construct_futures_symbols(symbol, start_year, end_year)
@@ -93,16 +92,13 @@ def get_active_contracts(symbol, full_prices):
     df = pd.DataFrame({'Date': unique_dates})
     df = df.set_index(['Date'])
     df.insert(0, 'Symbol', symbol)
-    # determine which contract to trade, e.g. 2nd nearest or 12th nearest
-    futures_info = get_futures_info()
-    traded_contract = futures_info.loc[futures_info['Symbol'] == symbol]['TradedContract'].values[0]
     # find active contract for each date in data frame
     for d in df.index:
-        # check that there are sufficient contracts available on a given date
+        # check that there are at least two contracts available on a given date
         # sort by contract_sort but use contract name
-        if len(full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'].index) >= traded_contract:
-            df.loc[d, 'Contract'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][traded_contract - 1]
-            df.loc[d, 'Contract_Sort'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract_Sort'][traded_contract - 1]
+        if len(full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'].index) >= 2:
+            df.loc[d, 'Contract'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][1]
+            df.loc[d, 'Contract_Sort'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract_Sort'][1]
     # delete empty rows
     df = df[df['Contract'] == df['Contract']]
     return df
@@ -161,7 +157,7 @@ def get_active_prices_csv(symbol):
     return df
 
 
-def get_forecast_inputs(symbol, start_year=2015, end_year=dt.date.today().year):
+def get_forecast_inputs(symbol, start_year=2015, end_year=2016):
     """Constructs data frame with necessary data for all strategy forecast
      calculations, e.g. EWMAC, carry, etc."""
     futures_info = get_futures_info()
@@ -243,32 +239,8 @@ def calc_ewmac_forecasts(forecast_inputs, fast_days, slow_days):
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCrossover'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
-    df.loc[df['Forecast'] > 20, 'ForecastCapped'] = 20
-    df.loc[df['Forecast'] < -20, 'ForecastCapped'] = -20
-    return df
-
-
-def calc_rsi_forecasts(forecast_inputs, span=14):
-    """Constructs data frame comprised of forecasts for a specified
-    forecasts_input data for the rsi strategy."""
-    df = forecast_inputs.copy()
-    df['AverageGain'] = np.abs(df[df['ReturnDay'] > 0]['ReturnDay'])
-    df['AverageGain'] = pd.ewma(df['AverageGain'], span=span)
-    df['AverageLoss'] = np.abs(df[df['ReturnDay'] < 0]['ReturnDay'])
-    df['AverageLoss'] = pd.ewma(df['AverageLoss'], span=span)
-    df['RawRSI'] = 100.0 - (100.0 / (1.0 + df['AverageGain'] / df['AverageLoss']))
-    df['SmoothedRSI'] = pd.ewma(df['RawRSI'], span=span)
-    # map RSI to -30 to 0 for RSI<30 and 0 to +30 for RSI>30
-    df['Forecast'] = 0.0
-    df['Forecast'] = -(-20 + df['RawRSI'] / 2.5)
-    df['Forecast'] = (df['Forecast']**3.0).rolling(span).mean()
-    # df['Forecast'] **= 1.0/3.0  # can't do it this way, as I lose the sign
-    # df['Forecast'] /= 10.0
-    #    df.loc[df['RSI'] < 30, 'Forecast'] = -(-30.0 + df['RSI'])
-    #    df.loc[df['RSI'] > 70, 'Forecast'] = -(-70.0 + df['RSI'])
-    df['ForecastCapped'] = 0.0
-    df.loc[df['Forecast'] > 20, 'ForecastCapped'] = 20
-    df.loc[df['Forecast'] < -20, 'ForecastCapped'] = -20
+    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
@@ -314,12 +286,12 @@ def calc_carry_forecasts(forecast_inputs):
     df['ScalarPooled'] = scalar_pooled
     df['Forecast'] = df['VolAdjCarry'] * df['ScalarPooled']
     df['ForecastCapped'] = df['Forecast']
-    df.loc[df['Forecast'] > 20, 'ForecastCapped'] = 20
-    df.loc[df['Forecast'] < -20, 'ForecastCapped'] = -20
+    df['ForecastCapped'].loc[df['Forecast'] > 20] = 20
+    df['ForecastCapped'].loc[df['Forecast'] < -20] = -20
     return df
 
 
-def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().year, threshold=False):
+def calc_instrument_forecasts(symbol, start_year=2015, end_year=2016, threshold=False):
     """Constructs data frame comprised of instrument forecasts based on available
     strategies and weights."""
     forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
@@ -341,7 +313,6 @@ def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().
                 #                                   df['EWMAC64,256Forecast']) / 3.0
             else:
                 df[strategy_name + 'Forecast'] = calc_carry_forecasts(forecast_inputs)['ForecastCapped']
-
         if threshold:
             df[strategy_name] = (-np.sign(df[strategy_name + 'Forecast']) * 30.0 + 3.0 * df[strategy_name + 'Forecast'])
             df[strategy_name].loc[df[strategy_name] > 30] = 30
@@ -351,7 +322,7 @@ def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().
             df[strategy_name] = df[strategy_name + 'Forecast']
 
     # calculate instrument forecast as weighted average of strategy forecasts
-    forecasts = df[['EWMAC2,8', 'EWMAC16,64', 'EWMAC32,128', 'CARRY']]
+    forecasts = df[['EWMAC2,8', 'EWMAC16,64', 'EWMAC64,256', 'CARRY']]
     weights = strategies['AdjWeight']
     df['InstrumentForecast'] = np.dot(forecasts, weights)
 
@@ -373,8 +344,8 @@ def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().
                'InstrumentForecast', 'BlockSize', 'BlockValue', 'InstrumentValueVol', 'Rate']]
 
 
-def run_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], start_date=dt.date(2015, 1, 1),
-                 end_year=dt.date.today().year, starting_capital=1000000.0, volatility_target=0.25):
+def run_backtest(symbols_list=['ED', 'FVS', 'MGC', 'YC'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
+                 starting_capital=15000.0, volatility_target=0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
     # set scalar variables
@@ -426,20 +397,20 @@ def run_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], st
 
                 # update capital balance and volatility targets based on gain loss in backtest_df
                 if i != 0:  # skip first day
-                    backtest_df.loc[active_date, 'TotalPositionCost'] += data_dict[key]['PositionCost'][prev_date]
-                    backtest_df.loc[active_date, 'TotalPositionValue'] += data_dict[key]['PositionValue'][prev_date]
-                    backtest_df.loc[active_date, 'TotalGainLoss'] += data_dict[key]['GainLossCum'][prev_date]
-                    backtest_df.loc[active_date, 'PortfolioValue'] = starting_capital + backtest_df['TotalGainLoss'][active_date]
-                    backtest_df.loc[active_date, 'DailyCashTargetVol'] = backtest_df['PortfolioValue'][active_date] * \
+                    backtest_df['TotalPositionCost'][active_date] += data_dict[key]['PositionCost'][prev_date]
+                    backtest_df['TotalPositionValue'][active_date] += data_dict[key]['PositionValue'][prev_date]
+                    backtest_df['TotalGainLoss'][active_date] += data_dict[key]['GainLossCum'][prev_date]
+                    backtest_df['PortfolioValue'][active_date] = starting_capital + backtest_df['TotalGainLoss'][active_date]
+                    backtest_df['DailyCashTargetVol'][active_date] = backtest_df['PortfolioValue'][active_date] * \
                                                                      volatility_target / (256 ** 0.5)
-                data_dict[key].loc[active_date, 'VolatilityScalar'] = backtest_df['DailyCashTargetVol'][active_date] / \
+                data_dict[key]['VolatilityScalar'][active_date] = backtest_df['DailyCashTargetVol'][active_date] / \
                                                                   data_dict[key]['InstrumentValueVol'][active_date]
-                data_dict[key].loc[active_date, 'SubsystemPosition'] = data_dict[key]['InstrumentForecast'][active_date] / \
+                data_dict[key]['SubsystemPosition'][active_date] = data_dict[key]['InstrumentForecast'][active_date] / \
                                                                    10.0 * data_dict[key]['VolatilityScalar'][active_date]
-                data_dict[key].loc[active_date, 'SystemPosition'] = data_dict[key]['SubsystemPosition'][active_date] * \
+                data_dict[key]['SystemPosition'][active_date] = data_dict[key]['SubsystemPosition'][active_date] * \
                                                                 instrument_weight * instrument_diversifier_multiplier
                 if i != 0:  # skip first day
-                    data_dict[key].loc[active_date, 'StartingPosition'] = data_dict[key]['EndingPosition'].loc[prev_date]
+                    data_dict[key]['StartingPosition'][active_date] = data_dict[key]['EndingPosition'].loc[prev_date]
 
                 # determine trade based on starting_position, ending_position and system_position
                 # define variable to minimize space
@@ -453,154 +424,25 @@ def run_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], st
                 if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) >
                                                   position_inertia):
                     ending_position = np.round(system_position, 0)
-                data_dict[key].loc[active_date, 'EndingPosition'] = ending_position
-                data_dict[key].loc[active_date, 'PositionChange'] = ending_position - starting_position
+                data_dict[key]['EndingPosition'][active_date] = ending_position
+                data_dict[key]['PositionChange'][active_date] = ending_position - starting_position
                 if i != 0:  # skip first day; else set PositionCost equal to previous value
-                    data_dict[key].loc[active_date, 'PositionCost'] = data_dict[key]['PositionCost'].loc[prev_date]
-                data_dict[key].loc[active_date, 'PositionCost'] += (ending_position - starting_position) * \
+                    data_dict[key]['PositionCost'][active_date] = data_dict[key]['PositionCost'].loc[prev_date]
+                data_dict[key]['PositionCost'][active_date] += (ending_position - starting_position) * \
                                                                 block_size * block_price
                 # reset PositionCost when contracts roll
-                if i != 0 and data_dict[key].loc[active_date, 'Contract'] != data_dict[key]['Contract'][prev_date]:
-                    data_dict[key].loc[active_date, 'PositionCost'] = ending_position * block_price * block_size - \
+                if i != 0 and data_dict[key]['Contract'][active_date] != data_dict[key]['Contract'][prev_date]:
+                    data_dict[key]['PositionCost'][active_date] = ending_position * block_price * block_size - \
                                                                   (data_dict[key]['GainLossCum'][prev_date] * fx_rate)
-                data_dict[key].loc[active_date, 'PositionValue'] = ending_position * block_size * block_price
-                data_dict[key].loc[active_date, 'GainLossCum'] = (data_dict[key]['PositionValue'][active_date] -
+                data_dict[key]['PositionValue'][active_date] = ending_position * block_size * block_price
+                data_dict[key]['GainLossCum'][active_date] = (data_dict[key]['PositionValue'][active_date] -
                                                              data_dict[key]['PositionCost'][active_date]) / fx_rate
                 prev_date = active_date
 
     return backtest_df, data_dict
 
 
-def run_simple_backtest(symbol, rule_variant=['EWMAC', '2,8'], start_date=dt.date(2015, 1, 1), end_year=dt.date.today().year,
-                 starting_capital=1000000.0, volatility_target=0.25):
-    """Conducts backtest using single symbol and single trading rule over
-    specified period of time."""
-    # set scalar variables
-    start_year = start_date.year
-    instrument_weight = 1.0
-    instrument_diversifier_multiplier = 1.0
-    position_inertia = 0.1
-
-    # determine which rule for which to run forecast
-    forecast_inputs = get_forecast_inputs(symbol, start_year, end_year)
-    if rule_variant[0] == 'CARRY':
-        df = calc_carry_forecasts(forecast_inputs)
-    elif rule_variant[0] == 'EWMAC':
-        fast = int(rule_variant[1].split(',')[0])
-        slow = int(rule_variant[1].split(',')[1])
-        df = calc_ewmac_forecasts(forecast_inputs, fast, slow)
-    elif rule_variant[0] == 'RSI':
-        span = int(rule_variant[1])
-        df = calc_rsi_forecasts(forecast_inputs, span)
-    df['InstrumentForecast'] = df['ForecastCapped']
-
-    # calculate instrument value vol
-    futures_info = get_futures_info()
-    df['BlockSize'] = futures_info.loc[futures_info['Symbol'] == symbol, 'BlockSize'].values[0]
-    df['BlockValue'] = df['SettleRaw'] * df['BlockSize'] * 0.01
-    df['InstrumentCurVol'] = df['BlockValue'] * df['PriceVolatilityPct'] * 100
-    # incorporate historical fx rates
-    fx_symbol = futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
-    if fx_symbol != 'USD':
-        fx_symbol = 'CURRFX/USD' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
-        fx_rates = quandl.get(fx_symbol)
-        df = df.merge(fx_rates, how='left', left_index=True, right_index=True)
-    else:
-        df['Rate'] = 1.0
-    df['InstrumentValueVol'] = df['InstrumentCurVol'] / df['Rate']
-
-    # begin backtest
-    # cutoff first 90 trading days of data
-    df = df.iloc[90:]
-    # placeholders below
-    df['PortfolioValue'] = starting_capital
-    df['DailyCashTargetVol'] = starting_capital * volatility_target / (256 ** 0.5)
-    df['VolatilityScalar'] = 0.0
-    df['SubsystemPosition'] = 0.0
-    df['SystemPosition'] = 0.0
-    df['StartingPosition'] = 0.0
-    df['EndingPosition'] = 0.0
-    df['PositionChange'] = 0.0
-    df['PositionCost'] = 0.0
-    df['PositionValue'] = 0.0
-    df['GainLossCum'] = 0.0
-
-    # iterate through each date in df to retrieve ForecastCapped and InstrumentValueVol
-    for i in list(range(0, len(df))):
-        active_date = df.index[i]
-
-        # update capital balance and volatility targets based on gain loss in backtest_df
-        if i != 0:  # skip first day
-            df.loc[active_date, 'PositionCost'] += df['PositionCost'][prev_date]
-            df.loc[active_date, 'PositionValue'] += df['PositionValue'][prev_date]
-            df.loc[active_date, 'GainLossCum'] += df['GainLossCum'][prev_date]
-            df.loc[active_date, 'PortfolioValue'] = starting_capital + df['GainLossCum'][active_date]
-            df.loc[active_date, 'DailyCashTargetVol'] = df['PortfolioValue'][active_date] * \
-                                                             volatility_target / (256 ** 0.5)
-        df.loc[active_date, 'VolatilityScalar'] = df['DailyCashTargetVol'][active_date] / df['InstrumentValueVol'][active_date]
-        df.loc[active_date, 'SubsystemPosition'] = df['InstrumentForecast'][active_date] / 10.0 * df['VolatilityScalar'][active_date]
-        df.loc[active_date, 'SystemPosition'] = df['SubsystemPosition'][active_date] * instrument_weight * \
-                                            instrument_diversifier_multiplier
-        if i != 0:  # skip first day
-            df.loc[active_date, 'StartingPosition'] = df['EndingPosition'].loc[prev_date]
-
-        # determine trade based on starting_position, ending_position and system_position
-        # define variable to minimize space
-        starting_position = df['StartingPosition'][active_date]
-        ending_position = starting_position
-        system_position = df['SystemPosition'][active_date]
-        block_size = df['BlockSize'][active_date]
-        block_price = df['SettleRaw'][active_date]
-        fx_rate = df['Rate'][active_date]
-
-        if starting_position == 0 or (np.abs((system_position - starting_position) / starting_position) >
-                                          position_inertia):
-            ending_position = np.round(system_position, 0)
-        df.loc[active_date, 'EndingPosition'] = ending_position
-        df.loc[active_date, 'PositionChange'] = ending_position - starting_position
-        if i != 0:  # skip first day; else set PositionCost equal to previous value
-            df.loc[active_date, 'PositionCost'] = df['PositionCost'].loc[prev_date]
-        df.loc[active_date, 'PositionCost'] += (ending_position - starting_position) * block_size * block_price
-        # reset PositionCost when contracts roll
-        if i != 0 and df.loc[active_date, 'Contract'] != df['Contract'][prev_date]:
-            df.loc[active_date, 'PositionCost'] = ending_position * block_price * block_size - \
-                                              (df['GainLossCum'][prev_date] * fx_rate)
-        df.loc[active_date, 'PositionValue'] = ending_position * block_size * block_price
-        df.loc[active_date, 'GainLossCum'] = (df['PositionValue'][active_date] - df['PositionCost'][active_date]) / fx_rate
-        prev_date = active_date
-
-    # calculate backtest summary statistics
-    df['PortfolioReturnDayPct'] = df['PortfolioValue'] / df['PortfolioValue'].shift(1) - 1.0
-    rule = rule_variant[0]
-    variant = rule_variant[1] if rule == 'EWMAC' else ''
-    trading_days = df.shape[0]
-    annualized_return = np.exp(np.nansum(np.log(1 + df['PortfolioReturnDayPct']))) ** (256.0 / trading_days) - 1.0
-    annualized_volatility = np.std(df['PortfolioReturnDayPct']) * np.sqrt(256.0)
-    sharpe_ratio = annualized_return / annualized_volatility
-    blocks_traded = np.sum(np.abs(df['PositionChange']))
-    avg_position = np.average(np.abs(df['EndingPosition']))
-    annualized_turnover = blocks_traded / (2 * avg_position) * 256.0 / trading_days
-    results_df = pd.DataFrame({'Symbol': symbol, 'Rule': rule, 'Variant': variant, 'AnnReturn': annualized_return,
-                               'AnnVol': annualized_volatility, 'Sharpe': sharpe_ratio, 'Trades': blocks_traded,
-                               'AvgPosition': avg_position, 'AnnTurnover': annualized_turnover,
-                               'StartingCapital': starting_capital, 'TargetVolatility': volatility_target,
-                               'TradingDays': trading_days}, index=[0])
-    return results_df[['Symbol', 'Rule', 'Variant', 'AnnReturn', 'AnnVol', 'Sharpe', 'Trades', 'AvgPosition',
-                       'AnnTurnover', 'TradingDays']], df
-
-
-def compile_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS']):
-    results_df = pd.DataFrame()
-    strategies = get_strategy_info()
-    for symbol in symbols_list:
-        for index, row in strategies.iterrows():
-            rule_variant = [strategies.iloc[index]['Rule'], strategies.iloc[index]['Variation']]
-            df = run_simple_backtest(symbol, rule_variant, start_date=dt.date(2006, 1, 1))
-            results_df = results_df.append(df)
-    return results_df
-
-
-def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capital=15000.0, volatility_target=0.25):
+def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capital=14000.0, volatility_target=0.25):
     """Calculates position targets for actual trading."""
     # set scalar variables
     instrument_weight = 1.0 / len(symbols_list)
@@ -629,14 +471,12 @@ def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capi
 # symbols_list = get_futures_info()['Symbol'][2:].tolist()
 # symbols_list = symbols_list[:-1] # remove KR3 since not available on Quandl
 # test = run_backtest(symbols_list, dt.date(2006,1,1))
-
 # Mac
 # test[0].to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
 # df = pd.DataFrame()
 # for key in test[1].keys():
 #    df = df.append(test[1][key])
 # df.to_csv('/Users/brucehao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
-
 # Windows
 # test[0].to_csv('/Users/bhao/Google Drive/Investing/SysTrade/portfolio_' + str(dt.date.today()) + '.csv')
 # df = pd.DataFrame()
@@ -644,25 +484,15 @@ def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capi
 #     df = df.append(test[1][key])
 # df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
 
-
 # run calc_position_targets and email to self
 position_targets = calc_position_targets()
-position_targets_paper = calc_position_targets(['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], 1000000.0, 0.25)
 
 yag = yagmail.SMTP('hao.bruce@gmail.com')
 
 to = 'hao.bruce@gmail.com'
 subject = 'SysTrade position targets ' + str(dt.date.today())
 body = 'Position targets below:'
-html = position_targets[['Symbol', 'Contract', 'SettleRaw', 'SystemPosition', 'InstrumentForecast']].to_html()
+html = position_targets[['Symbol', 'SettleRaw', 'SystemPosition', 'InstrumentForecast']].to_html()
 html = html.replace('border="1"', 'border="0"')
 
 yag.send(to=to, subject=subject, contents=[body, html])
-
-to_paper = 'hao.bruce@gmail.com'
-subject_paper = 'SysTrade paper position targets ' + str(dt.date.today())
-body_paper = 'Paper position targets below:'
-html_paper = position_targets_paper[['Symbol', 'Contract', 'SettleRaw', 'SystemPosition', 'InstrumentForecast']].to_html()
-html_paper = html_paper.replace('border="1"', 'border="0"')
-
-yag.send(to=to_paper, subject=subject_paper, contents=[body_paper, html_paper])

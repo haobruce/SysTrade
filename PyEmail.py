@@ -1,8 +1,13 @@
-import smtplib
+import yagmail
 
 
-smtpObj = smtplib.SMTP('smtp.gmail.com', 587)
-smtpObj.ehlo()
-smtpObj.starttls()
-smtpObj.login('hao.bruce@gmail.com', 'wrkbojclogbsvsav')  # application-specific password setup on google
-# smtpObj.sendmail('hao.bruce@gmail.com', 'hao.bruce@gmail.com', 'Subject: Email content\nMore content.')
+#yagmail.register('hao.bruce@gmail.com', 'wrkbojclogbsvsav')
+yag = yagmail.SMTP('hao.bruce@gmail.com')
+
+to = 'hao.bruce@gmail.com'
+subject = 'SysTrade position targets'
+body = 'Position targets below:'
+html = df[['SettleRaw', 'Symbol', 'SystemPosition']].to_html()
+html = html.replace('border="1"', 'border="0"')
+
+yag.send(to=to, subject=subject, contents=[body, html])
