@@ -1,12 +1,12 @@
 Include,AssetClass,InstrumentName,Symbol,BlockSize,FX,MarginRequirement,ExpMonths,TradedContract,YearLimit,Exchange,PriceSource
-Y,Commodities,Corn,C,50,USD,1562.5,HKNUZ,2,,CME,Quandl
-Y,Commodities,Corn mini,YC,10,USD,350,HKNUZ,2,2014,CME,Quandl
-Y,Commodities,Crude Oil emini,QM,500,USD,2120,MZ,2,2014,CME,Quandl
-Y,Commodities,Gold emicro,MGC,10,USD,675,GJMQVZ,2,2014,CME,Quandl
-Y,Commodities,Natural Gas,NG,10000,USD,2268.75,FGHJKMNQUVXZ,2,,CME,Quandl
-Y,Commodities,Natural Gas emini,QG,2500,USD,692.55,FGHJKMNQUVXZ,2,2014,CME,Quandl
-Y,Commodities,Plat,PL,50,USD,3000,FJNV,2,,CME,Quandl
-Y,Commodities,Soybean Mini,YK,10,USD,775,FHKNQUX,2,2014,CME,Quandl
+Y,Agriculture,Corn,C,50,USD,1562.5,HKNUZ,2,,CME,Quandl
+Y,Agriculture,Corn mini,YC,10,USD,350,HKNUZ,2,2014,CME,Quandl
+Y,Energy,Crude Oil emini,QM,500,USD,2120,MZ,2,2014,CME,Quandl
+Y,Metals,Gold emicro,MGC,10,USD,675,GJMQVZ,2,2014,CME,Quandl
+Y,Energy,Natural Gas,NG,10000,USD,2268.75,FGHJKMNQUVXZ,2,,CME,Quandl
+Y,Energy,Natural Gas emini,QG,2500,USD,692.55,FGHJKMNQUVXZ,2,2014,CME,Quandl
+Y,Metals,Plat,PL,50,USD,3000,FJNV,2,,CME,Quandl
+Y,Agriculture,Soybean Mini,YK,10,USD,775,FHKNQUX,2,2014,CME,Quandl
 Y,Equities,Dow Jones emini,YM,5,USD,4437.5,HMUZ,2,,CME,Quandl
 Y,Equities,EUROSTX,FESX,10,EUR,3169.65,HMUZ,2,,EUREX,Quandl
 Y,Equities,NASDAQ 100 emini,NQ,20,USD,4500,HMUZ,2,,CME,Quandl
