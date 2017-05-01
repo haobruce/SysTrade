@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import math
 import datetime as dt
-# import urllib2
 import quandl
 import yagmail
 
@@ -103,6 +102,12 @@ def get_active_contracts(symbol, full_prices):
         if len(full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'].index) >= traded_contract:
             df.loc[d, 'Contract'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract'][traded_contract - 1]
             df.loc[d, 'Contract_Sort'] = full_prices.sort_index()[d:d].sort_values('Contract_Sort')['Contract_Sort'][traded_contract - 1]
+    # check that most recent contract has recent pricing data
+    for contract in df['Contract_Sort'].sort_values(ascending=False).unique()[0:]:
+        if max(df.loc[df['Contract_Sort'] == contract].index) < max(df.index):
+            df = df.loc[df['Contract_Sort'] != contract]
+        else:
+            break
     # delete empty rows
     df = df[df['Contract'] == df['Contract']]
     return df
@@ -113,6 +118,8 @@ def get_active_prices(symbol, full_prices):
     df = get_active_contracts(symbol, full_prices)
     # add settle prices to most recent contract
     contract = df['Contract_Sort'].sort_values(ascending=False).unique()[0]
+    # check that most recent contract has recent pricing data
+
     prices = full_prices[full_prices['Contract_Sort'] == contract]
     # add column for unadjusted settle prices for easier checking
     df.loc[df['Contract_Sort'] == contract, 'SettleRaw'] = prices['Settle']
@@ -363,8 +370,9 @@ def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().
     # incorporate historical fx rates
     fx_symbol = futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
     if fx_symbol != 'USD':
-        fx_symbol = 'CURRFX/USD' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
+        fx_symbol = 'CUR/' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
         fx_rates = quandl.get(fx_symbol)
+        fx_rates.columns = ['Rate']
         df = df.merge(fx_rates, how='left', left_index=True, right_index=True)
     else:
         df['Rate'] = 1.0
@@ -374,7 +382,7 @@ def calc_instrument_forecasts(symbol, start_year=2015, end_year=dt.date.today().
 
 
 def run_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], start_date=dt.date(2015, 1, 1),
-                 end_year=dt.date.today().year, starting_capital=1000000.0, volatility_target=0.25):
+                 end_year=dt.date.today().year, starting_capital=100000.0, volatility_target=0.25):
     """Conducts backtest of available strategies on specified futures contracts over
     specified period of time."""
     # set scalar variables
@@ -502,8 +510,9 @@ def run_simple_backtest(symbol, rule_variant=['EWMAC', '2,8'], start_date=dt.dat
     # incorporate historical fx rates
     fx_symbol = futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
     if fx_symbol != 'USD':
-        fx_symbol = 'CURRFX/USD' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
+        fx_symbol = 'CUR/' + futures_info.loc[futures_info['Symbol'] == symbol, 'FX'].values[0]
         fx_rates = quandl.get(fx_symbol)
+        fx_rates.columns = ['Rate']
         df = df.merge(fx_rates, how='left', left_index=True, right_index=True)
     else:
         df['Rate'] = 1.0
@@ -600,15 +609,24 @@ def compile_backtest(symbols_list=['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS']
     return results_df
 
 
-def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capital=15000.0, volatility_target=0.25):
+def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC', 'YK'], starting_capital=15000.0, volatility_target=0.25):
     """Calculates position targets for actual trading."""
+    # get asset class information for instrument weight calculation
+    futures_info = get_futures_info()
+    futures_info = futures_info.loc[futures_info['Symbol'].isin(symbols_list)]
+    futures_info = pd.DataFrame({'Symbol': symbols_list}).merge(futures_info, how='left', on='Symbol')
+    asset_classes = futures_info.groupby('AssetClass')['Symbol'].count()
+    asset_classes = pd.DataFrame({'AssetClass': asset_classes.index, 'AssetClassCount': asset_classes.values})
+    futures_info = futures_info.merge(asset_classes, how='left', on='AssetClass')
+
     # set scalar variables
-    instrument_weight = 1.0 / len(symbols_list)
+    instrument_weight = 1.0 / len(asset_classes) / futures_info['AssetClassCount']
     # calculate diversification multiplier
     correlations = get_correlation_matrix(symbols_list)
-    weights = pd.DataFrame({'Symbol': symbols_list, 'Weight': instrument_weight})
-    weights.set_index('Symbol', inplace=True)
-    instrument_diversifier_multiplier = 1.0 / weights.transpose().dot(correlations.dot(weights)).values[0,0] ** 0.5
+    weights = pd.DataFrame({'Symbol': symbols_list, 'InstrumentWeight': instrument_weight})
+    instrument_diversifier_multiplier = 1.0 / \
+        np.array(weights['InstrumentWeight']).transpose().dot(correlations.dot(np.array(weights['InstrumentWeight']))) \
+        ** 0.5
 
     df = pd.DataFrame()
     for symbol in symbols_list:
@@ -619,15 +637,16 @@ def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capi
     df['DailyCashTargetVol'] = df['PortfolioValue'] * volatility_target / (256 ** 0.5)
     df['VolatilityScalar'] = df['DailyCashTargetVol'] / df['InstrumentValueVol']
     df['SubsystemPosition'] = df['InstrumentForecast'] / 10.0 * df['VolatilityScalar']
-    df['InstrumentWeight'] = instrument_weight
+    df = df.merge(weights, how='left', on='Symbol')  # instrument weight
     df['InstrumentDiversifierMultiplier'] = instrument_diversifier_multiplier
-    df['SystemPosition'] = df['SubsystemPosition'] * instrument_weight * instrument_diversifier_multiplier
+    df['SystemPosition'] = df['SubsystemPosition'] * df['InstrumentWeight'] * instrument_diversifier_multiplier
     return df
 
 
 # run backtest
 # symbols_list = get_futures_info()['Symbol'][2:].tolist()
 # symbols_list = symbols_list[:-1] # remove KR3 since not available on Quandl
+# symbols_list = ['YC', 'MGC', 'QG', 'FESX', 'ED', 'FVS']
 # test = run_backtest(symbols_list, dt.date(2006,1,1))
 
 # Mac
@@ -644,20 +663,21 @@ def calc_position_targets(symbols_list=['ED', 'FVS', 'MGC', 'YC'], starting_capi
 #     df = df.append(test[1][key])
 # df.to_csv('/Users/bhao/Google Drive/Investing/SysTrade/instruments_' + str(dt.date.today()) + '.csv')
 
-
 # run calc_position_targets and email to self
-position_targets = calc_position_targets()
-position_targets_paper = calc_position_targets(['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS'], 1000000.0, 0.25)
+position_targets = calc_position_targets(['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS', 'YK'], 220000.0, 0.25)
 
 yag = yagmail.SMTP('hao.bruce@gmail.com')
 
 to = 'hao.bruce@gmail.com'
+to2 = 'andrewphilliplee@gmail.com'
 subject = 'SysTrade position targets ' + str(dt.date.today())
 body = 'Position targets below:'
 html = position_targets[['Symbol', 'Contract', 'SettleRaw', 'SystemPosition', 'InstrumentForecast']].to_html()
 html = html.replace('border="1"', 'border="0"')
 
-yag.send(to=to, subject=subject, contents=[body, html])
+yag.send(to=[to, to2], subject=subject, contents=[body, html])
+
+position_targets_paper = calc_position_targets(['YC', 'MGC', 'QG', 'FESX', 'MP', 'ED', 'FVS', 'YK', 'ES', 'TY'], 1300000.0, 0.25)
 
 to_paper = 'hao.bruce@gmail.com'
 subject_paper = 'SysTrade paper position targets ' + str(dt.date.today())
@@ -666,3 +686,35 @@ html_paper = position_targets_paper[['Symbol', 'Contract', 'SettleRaw', 'SystemP
 html_paper = html_paper.replace('border="1"', 'border="0"')
 
 yag.send(to=to_paper, subject=subject_paper, contents=[body_paper, html_paper])
+
+
+# visualizations
+# import matplotlib.pyplot as plt
+# import seaborn as sns
+# from ggplot import *
+
+# symbols_list = ['YC', 'MGC', 'QG', 'FESX', 'ED', 'FVS']
+# test = run_backtest(symbols_list, dt.date(2006, 1, 1))
+#
+# df_instruments = pd.DataFrame({'Symbol': symbols_list[0],
+#                                'GainLossCum': test[1][symbols_list[0]]['GainLossCum']})
+# for symbol in symbols_list[1:]:
+#     df_temp = pd.DataFrame({'Symbol': symbol,
+#                             'GainLossCum': test[1][symbol]['GainLossCum']})
+#     df_instruments = df_instruments.append(df_temp)
+#
+# df_instruments['Date'] = df_instruments.index
+# df_instruments = df_instruments[df_instruments > dt.datetime(2014, 6, 30)]
+#
+# df_instruments_plot = ggplot(df_instruments, aes(x='Date', y='GainLossCum', color='Symbol')) +\
+#     geom_line() +\
+#     ggtitle('$100,000 @ 25% Volatility')
+# df_instruments_plot
+#
+# df_sum = df_instruments.groupby('Date').sum()
+# df_sum['Date'] = df_sum.index
+# df_sum_plot = ggplot(df_sum, aes(x='Date', y='GainLossCum')) +\
+#     geom_line() +\
+#     ggtitle('$100,000 @ 25% Volatility')
+# df_sum_plot
+
